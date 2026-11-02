@@ -14,6 +14,7 @@ const RisuPluginStorageFix = (() => {
   // was already running when the pointer changed has to finish first; a timeout only reports.
   const DEFAULT_SAVE_TIMEOUT_MS = 60000;
   const SAVE_POLL_INTERVAL_MS = 500;
+  const SAVE_UNKNOWN_RETRY_COUNT = 3;
   const DATABASE_KEY = 'database/database.bin';
   const DATABASE_NAME = 'risuai';
   const OBJECT_STORE = 'keyvaluepairs';
@@ -25,6 +26,9 @@ const RisuPluginStorageFix = (() => {
     NOT_RISU: '리스 플러그인 API를 찾지 못했어요. 리스가 열린 탭에서 실행해 주세요.',
     NOT_READY: '리스 데이터베이스가 아직 준비되지 않았어요. 로딩이 끝난 뒤 다시 실행해 주세요.',
     UNSUPPORTED_BACKEND: '계정·노드·데스크톱 저장소는 이 도구로 고치지 않아요. 일시적인 연결 문제일 수도 있어요.',
+    UNSUPPORTED_BROWSER: '이 브라우저에서는 저장소를 안전하게 확인할 수 없어요. OPFS와 gzip 읽기를 지원하는 브라우저에서 실행해 주세요.',
+    UNCERTAIN: '인덱스 파일을 확실하게 읽을 수 없어서 변경하지 않았어요. 다른 리스 탭을 닫고 새로고침한 뒤 다시 실행해 주세요.',
+    NOT_SETTLED: '현재 탭과 저장 파일의 인덱스가 일치하지 않아 변경하지 않았어요. 다른 리스 탭을 닫고 새로고침한 뒤 다시 실행해 주세요.',
     NOT_BROKEN: '현재 플러그인 저장소는 끊어진 인덱스를 가리키고 있지 않아요. 변경하지 않았어요.',
     CHANGED: '진단 뒤 플러그인 저장소가 달라졌어요. 다시 진단해 주세요.',
     CANDIDATE_INVALID: '복구할 인덱스를 다시 읽을 수 없어요. 다시 진단해 주세요.',
@@ -103,6 +107,9 @@ const RisuPluginStorageFix = (() => {
       get localStorage() { return globalObj.localStorage; },
       get isNode() { return Boolean(globalObj.__NODE__); },
       get isTauri() { return Boolean(globalObj.__TAURI_INTERNALS__ || globalObj.window?.__TAURI_INTERNALS__); },
+      get hasOpfs() { return typeof globalObj.navigator?.storage?.getDirectory === 'function'; },
+      get hasDecompression() { return typeof globalObj.DecompressionStream === 'function'; },
+      get opfsWritable() { return typeof globalObj.FileSystemFileHandle?.prototype?.createWritable === 'function'; },
       opfsRoot: () => globalObj.navigator.storage.getDirectory(),
       forage: {
         keys: () => readStore('keys', undefined, []),
@@ -128,11 +135,26 @@ const RisuPluginStorageFix = (() => {
     if (backend(env) !== 'web') throw new FixError('UNSUPPORTED_BACKEND');
   }
 
+  function missingCapability(env) {
+    if (!env.hasOpfs) return 'opfs';
+    if (!env.hasDecompression) return 'decompression';
+    return null;
+  }
+
+  function requireBrowser(env) {
+    requireWeb(env);
+    if (missingCapability(env)) throw new FixError('UNSUPPORTED_BROWSER');
+  }
+
   function liveStorage(env) {
     const apis = env.pluginApis();
     if (!apis || typeof apis.getDatabase !== 'function') throw new FixError('NOT_RISU');
-    const storage = apis.getDatabase()?.pluginCustomStorage;
-    if (!storage || typeof storage !== 'object') throw new FixError('NOT_READY');
+    const db = apis.getDatabase();
+    const storage = db?.pluginCustomStorage;
+    if (!storage || typeof storage !== 'object') {
+      if (Array.isArray(db?.plugins)) return null;
+      throw new FixError('NOT_READY');
+    }
     return storage;
   }
 
@@ -182,25 +204,39 @@ const RisuPluginStorageFix = (() => {
   }
 
   async function readIndex(env, root, id, signal, prefixOnly = false, handle) {
+    throwIfCancelled(signal);
+    let fileHandle = handle;
+    if (!fileHandle) {
+      try { fileHandle = await root.getFileHandle(coldName(id)); } catch (error) {
+        throwIfCancelled(signal);
+        if (error?.code === 'CANCELLED') throw error;
+        return { state: error?.name === 'NotFoundError' ? 'missing' : 'uncertain' };
+      }
+    }
+    let file;
+    let bytes;
     try {
-      throwIfCancelled(signal);
-      const fileHandle = handle || await root.getFileHandle(coldName(id));
-      const file = await fileHandle.getFile();
-      const bytes = await readGzip(env, file, signal, prefixOnly);
-      const value = bytes && JSON.parse(new TextDecoder().decode(bytes));
-      throwIfCancelled(signal);
-      if (!isPluginStorageIndex(value)) return { state: 'unreadable' };
-      return { state: 'healthy', index: value, lastModified: file.lastModified };
+      file = await fileHandle.getFile();
+      bytes = await readGzip(env, file, signal, prefixOnly);
     } catch (error) {
       throwIfCancelled(signal);
       if (error?.code === 'CANCELLED') throw error;
-      return { state: error?.name === 'NotFoundError' ? 'missing' : 'unreadable' };
+      // Stock's fflate decoder can accept bytes that DecompressionStream rejects, so a
+      // decoding/access failure cannot establish that stock would lose this index too.
+      return { state: 'uncertain' };
     }
+    throwIfCancelled(signal);
+    let value;
+    try { value = bytes && JSON.parse(new TextDecoder().decode(bytes)); } catch (error) {
+      return { state: 'unreadable' };
+    }
+    if (!isPluginStorageIndex(value)) return { state: 'unreadable' };
+    return { state: 'healthy', index: value, lastModified: file.lastModified };
   }
 
-  async function findCandidates(env, { excludeId, signal, onProgress } = {}) {
+  async function scanCandidates(env, { excludeId, signal, onProgress } = {}) {
     throwIfCancelled(signal);
-    requireWeb(env);
+    requireBrowser(env);
     const root = await env.opfsRoot();
     const files = [];
     const names = new Set();
@@ -211,6 +247,7 @@ const RisuPluginStorageFix = (() => {
       if (name.startsWith('coldstorage_') && name.endsWith('.json')) files.push([name, handle]);
     }
     const candidates = [];
+    let uncertainCount = 0;
     let done = 0;
     if (onProgress) onProgress(done, files.length);
     for (const [name, handle] of files) {
@@ -218,6 +255,7 @@ const RisuPluginStorageFix = (() => {
       const id = name.slice('coldstorage_'.length, -'.json'.length);
       if (id !== excludeId) {
         const result = await readIndex(env, root, id, signal, true, handle);
+        if (result.state === 'uncertain') uncertainCount += 1;
         if (result.state === 'healthy') {
           // Same entry filter as stock doLoad: entries without a string key are skipped there too.
           const entries = result.index.entries.filter((entry) => typeof entry?.k === 'string');
@@ -231,7 +269,11 @@ const RisuPluginStorageFix = (() => {
       if (onProgress) onProgress(done, files.length);
     }
     throwIfCancelled(signal);
-    return candidates.sort((a, b) => b.lastModified - a.lastModified);
+    return { candidates: candidates.sort((a, b) => b.lastModified - a.lastModified), uncertainCount };
+  }
+
+  async function findCandidates(env, options = {}) {
+    return (await scanCandidates(env, options)).candidates;
   }
 
   async function diagnose(env, { signal, onProgress } = {}) {
@@ -244,19 +286,24 @@ const RisuPluginStorageFix = (() => {
     }
     const selectedBackend = backend(env);
     if (selectedBackend !== 'web') return { state: 'unsupported-backend', backend: selectedBackend };
-    const pointer = storage[POINTER_KEY];
+    const missing = missingCapability(env);
+    if (missing) return { state: 'unsupported-browser', backend: 'web', missing };
+    const pointer = storage?.[POINTER_KEY];
     if (typeof pointer !== 'string') return { state: 'no-index', backend: 'web' };
     const root = await env.opfsRoot();
     const result = await readIndex(env, root, pointer, signal);
     if (result.state === 'healthy') return { state: 'healthy', backend: 'web', pointer, keyCount: result.index.entries.length };
-    const candidates = await findCandidates(env, { excludeId: pointer, signal, onProgress });
-    return { state: 'broken', backend: 'web', pointer, reason: result.state, candidates };
+    const accountHint = env.localStorage.getItem('dosync') === 'avoid';
+    if (result.state === 'uncertain') return { state: 'uncertain', backend: 'web', pointer, accountHint };
+    const { candidates, uncertainCount } = await scanCandidates(env, { excludeId: pointer, signal, onProgress });
+    return { state: 'broken', backend: 'web', pointer, reason: result.state, candidates, uncertainCount, accountHint };
   }
 
   function checkLive(env, pointer, signal) {
     throwIfCancelled(signal);
-    requireWeb(env);
+    requireBrowser(env);
     const storage = liveStorage(env);
+    if (!storage) throw new FixError('NOT_BROKEN');
     if (storage[POINTER_KEY] !== pointer) throw new FixError('CHANGED');
     if (typeof pointer !== 'string') throw new FixError('NOT_BROKEN');
     return storage;
@@ -268,7 +315,28 @@ const RisuPluginStorageFix = (() => {
     const current = await readIndex(env, root, pointer, signal);
     const storage = checkLive(env, pointer, signal);
     if (current.state === 'healthy') throw new FixError('NOT_BROKEN');
+    if (current.state !== 'missing' && current.state !== 'unreadable') throw new FixError('UNCERTAIN');
     return { storage, root };
+  }
+
+  // Both edit paths require a settled disk snapshot and own the same pre-edit receipt baseline.
+  // Recheck after the disk read: another tab/plugin may have changed the live state while it yielded.
+  async function prepareEdit(env, pointer, signal) {
+    await checkBroken(env, pointer, signal);
+    const location = await databaseLocation(env);
+    const saved = await readAtLocation(env, location);
+    checkLive(env, pointer, signal);
+    if (saved.format !== 'risusave' || !saved.hasBlock || saved.pointer !== pointer) throw new FixError('NOT_SETTLED');
+    const { root } = await checkBroken(env, pointer, signal);
+    const baseline = await latestBackup(env, location, signal);
+    checkLive(env, pointer, signal);
+    return { root, location, baseline };
+  }
+
+  async function acceptsPersistedPointer(env, root, saved, target, deadPointer, signal) {
+    if (saved === target) return true;
+    if (typeof saved !== 'string' || saved === deadPointer) return false;
+    return (await readIndex(env, root, saved, signal)).state === 'healthy';
   }
 
   async function recover(env, { pointer, candidateId, signal, timeoutMs } = {}) {
@@ -277,17 +345,19 @@ const RisuPluginStorageFix = (() => {
     const candidate = await readIndex(env, root, candidateId, signal);
     if (candidate.state !== 'healthy') throw new FixError('CANDIDATE_INVALID');
     // The candidate read yields: a concurrent plugin write or backend switch must still win.
-    await checkBroken(env, pointer, signal);
+    const { location, baseline } = await prepareEdit(env, pointer, signal);
     const storage = checkLive(env, pointer, signal);
     storage[POINTER_KEY] = candidateId;
-    return await waitForPersisted(env, (saved) => saved === candidateId, { signal, timeoutMs });
+    return await waitForPersisted(env, (saved) => acceptsPersistedPointer(env, root, saved, candidateId, pointer, signal),
+      { signal, timeoutMs, location, baseline });
   }
 
   async function reset(env, { pointer, signal, timeoutMs } = {}) {
-    await checkBroken(env, pointer, signal);
+    const { root, location, baseline } = await prepareEdit(env, pointer, signal);
     const storage = checkLive(env, pointer, signal);
     delete storage[POINTER_KEY];
-    return await waitForPersisted(env, (saved) => saved === null, { signal, timeoutMs });
+    return await waitForPersisted(env, (saved) => acceptsPersistedPointer(env, root, saved, null, pointer, signal),
+      { signal, timeoutMs, location, baseline });
   }
 
   function toHex(text) {
@@ -301,7 +371,7 @@ const RisuPluginStorageFix = (() => {
 
   async function databaseLocation(env) {
     requireWeb(env);
-    if (env.localStorage.getItem('opfs_flag!') === 'able') {
+    if (env.localStorage.getItem('opfs_flag!') === 'able' && env.opfsWritable) {
       // Listing keys is enough to establish absence; do not load a large IDB database just
       // to choose a backend (the stock value is a truthy Uint8Array whenever the key exists).
       const keys = await env.forage.keys();
@@ -391,31 +461,40 @@ const RisuPluginStorageFix = (() => {
   }
 
   // This is a receipt wait only: it never forces a save, rolls back a live edit, or retries it.
-  // Save-loop backups announce a new database write; the backup itself is never read.
-  async function waitForPersisted(env, predicate, { signal, timeoutMs = DEFAULT_SAVE_TIMEOUT_MS } = {}) {
+  // A new backup opens the gate, but OPFS close() may still be in flight. IDB is transactional;
+  // only unknown reads there get a small retry budget before waiting for the next backup.
+  async function waitForPersisted(env, predicate, { signal, timeoutMs = DEFAULT_SAVE_TIMEOUT_MS, location, baseline } = {}) {
     throwIfCancelled(signal);
     requireWeb(env);
     const started = env.now();
-    const location = await databaseLocation(env);
-    let lastBackup = await latestBackup(env, location, signal);
-    let shouldRead = true;
+    location = location || await databaseLocation(env);
+    if (baseline === undefined) baseline = await latestBackup(env, location, signal);
+    let lastBackup = baseline;
+    let unknownRetries = 0;
     while (true) {
       throwIfCancelled(signal);
       requireWeb(env);
+      const latest = await latestBackup(env, location, signal);
+      const newer = latest > lastBackup;
+      lastBackup = Math.max(lastBackup, latest);
+      if (newer) unknownRetries = SAVE_UNKNOWN_RETRY_COUNT;
+      const shouldRead = lastBackup > baseline && (location.kind === 'opfs' || newer || unknownRetries > 0);
       if (shouldRead) {
+        if (!newer) unknownRetries -= 1;
         const saved = await readAtLocation(env, location);
         throwIfCancelled(signal);
         requireWeb(env);
-        // A save file without the plugin storage block reads as "no pointer"; it must never confirm a reset.
-        if (saved.format === 'risusave' && saved.hasBlock && predicate(saved.pointer)) return { confirmed: true };
+        if (saved.format !== 'unknown') unknownRetries = 0;
+        // A save without the block says nothing about the pointer, so it cannot confirm a reset.
+        if (saved.format === 'risusave' && saved.hasBlock && await predicate(saved.pointer)) {
+          throwIfCancelled(signal);
+          requireWeb(env);
+          return { confirmed: true, persistedPointer: saved.pointer };
+        }
       }
       const remaining = timeoutMs - (env.now() - started);
       if (remaining <= 0) throw new FixError('SAVE_UNCONFIRMED');
       await env.sleep(Math.min(SAVE_POLL_INTERVAL_MS, remaining));
-      throwIfCancelled(signal);
-      const latest = await latestBackup(env, location, signal);
-      shouldRead = latest > lastBackup;
-      lastBackup = Math.max(lastBackup, latest);
     }
   }
 
@@ -438,7 +517,7 @@ const RPF_STYLE = `
   :host { all: initial; }
   .panel {
     position: fixed; z-index: 2147483647; top: 16px; right: 16px;
-    width: min(440px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow: auto;
+    width: min(460px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow: auto;
     box-sizing: border-box; padding: 16px; border-radius: 14px;
     background: #fffaf3; color: #3b2a1f; border: 1px solid #e8cfb4;
     box-shadow: 0 12px 32px rgba(59, 42, 31, 0.28);
@@ -457,10 +536,13 @@ const RPF_STYLE = `
   .close { padding: 2px 10px; background: transparent; border: none; font-size: 18px; }
   p { margin: 8px 0; }
   ul { margin: 6px 0; padding-left: 20px; }
+  li { margin: 3px 0; }
   .status { margin-top: 10px; white-space: pre-wrap; word-break: break-word; }
   .error { color: #a3402a; }
   .ok { color: #2f6b3a; }
   .warn { color: #a3402a; font-weight: 600; }
+  .tabs { margin-top: 8px; padding: 6px 10px; border-radius: 8px; background: #f5e3cf; font-size: 13px; }
+  .alert { margin-top: 10px; padding: 10px; border: 1px solid #e3a58f; border-radius: 10px; background: #fdf0ea; }
   .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
   .note { font-size: 12px; color: #7a5f4b; margin-top: 12px; }
   .candidate { display: flex; gap: 8px; align-items: flex-start; padding: 8px; margin-top: 6px;
@@ -485,6 +567,18 @@ const RPF_BACKEND_TEXT = {
   tauri: '데스크톱 앱은 이 도구가 지원하지 않아요. 아무것도 바꾸지 않았어요.',
 };
 
+const RPF_BROWSER_TEXT = {
+  opfs: [
+    '이 주소에서는 도구가 브라우저 저장소(OPFS)를 읽을 수 없어요. 보통 http:// 로 연 사설 주소에서 이래요.',
+    'https:// 주소나 localhost로 연 리스에서 다시 실행해 주세요. 아무것도 바꾸지 않았어요.',
+  ].join('\n'),
+  decompression: '이 브라우저는 도구에 필요한 기능(압축 풀기)을 지원하지 않아요. 최신 크롬·엣지·파이어폭스에서 실행해 주세요. 아무것도 바꾸지 않았어요.',
+};
+
+const RPF_ACCOUNT_HINT = '이 브라우저에서 Risu 계정 저장을 쓰다가 로그아웃했거나 동기화를 끈 흔적이 있어요. '
+  + '그렇다면 최신 플러그인 데이터는 계정 쪽에 남아 있을 수 있어요 (이 도구는 계정 쪽을 확인할 수 없어요). '
+  + '되살리기나 초기화를 하기 전에, 설정의 Risu 계정에서 다시 로그인해 계정 데이터를 불러오는 것부터 해 보세요.';
+
 function rpfFormatTime(ms) {
   try {
     return new Date(ms).toLocaleString();
@@ -496,6 +590,13 @@ function rpfFormatTime(ms) {
 function rpfErrorText(error) {
   if (error instanceof RisuPluginStorageFix.FixError) return error.message;
   return `예상하지 못한 오류가 났어요: ${error && error.message ? error.message : error}`;
+}
+
+function rpfParagraph(text, className = '') {
+  const node = document.createElement('p');
+  if (className) node.className = className;
+  node.textContent = text;
+  return node;
 }
 
 function openFixPanel() {
@@ -515,36 +616,32 @@ function openFixPanel() {
         <h2>🧁 플러그인 저장소 고치기 <span class="version">v${RPF_VERSION}</span></h2>
         <button class="close" type="button" aria-label="닫기">✕</button>
       </div>
+      <p class="tabs">⚠ 다른 리스 탭은 모두 닫고, 이 탭을 새로고침한 직후에 실행해 주세요. 다른 탭이 열려 있으면 그 탭이 고장 난 상태를 다시 저장할 수 있어요.</p>
       <div class="status" role="status" aria-live="polite"></div>
       <div class="detail"></div>
       <div class="confirm" hidden>
         <p class="warn">초기화하기 전에 확인해 주세요</p>
-        <ul>
-          <li>지워지는 건 <b>없어진 목차를 가리키는 표시 하나</b>뿐이에요. 그 목차 안에 있던 값들은 이미 이 기기에서 읽을 수 없는 상태예요.</li>
-          <li>초기화하면 <b>모든 플러그인</b>이 빈 플러그인 저장소로 새로 시작해요 (리스 플러그인 저장소는 플러그인끼리 나눠 쓰지 않는 한 칸이라, 한 플러그인 몫만 골라 지울 수는 없어요).</li>
-          <li>그대로 남는 것: 캐릭터·채팅·설정, 플러그인 목록과 플러그인 설정값, 플러그인의 로컬 저장소(safeLocalStorage·IndexedDB).</li>
-          <li>최근에 <b>Risu 계정 로그아웃</b>이나 <b>"계정에 저장" 끄기</b>를 했다면, 목차가 계정 쪽에 남아 있을 수도 있어요 (이 도구로는 확인할 수 없어요). 그렇다면 초기화하기 전에 그쪽부터 확인해 보세요.</li>
-        </ul>
-        <label class="check"><input class="agree" type="checkbox"> <span>알겠어요. 플러그인 저장소를 빈 상태로 새로 시작할게요.</span></label>
+        <ul class="confirm-list"></ul>
+        <label class="check"><input class="agree" type="checkbox"> <span>알겠어요. 플러그인 저장소를 새로 시작할게요.</span></label>
         <div class="actions">
           <button class="do-reset danger" type="button" disabled>초기화하기</button>
           <button class="cancel-reset" type="button">취소</button>
         </div>
       </div>
       <div class="actions main-actions" hidden>
-        <button class="recover primary" type="button" hidden>선택한 목차로 되살리기</button>
+        <button class="recover primary" type="button" hidden>고른 시점으로 되살리기</button>
         <button class="reset" type="button" hidden>초기화하기…</button>
         <button class="reload primary" type="button" hidden>지금 새로고침</button>
         <button class="rerun" type="button" hidden>다시 확인</button>
       </div>
-      <p class="note">이 도구는 플러그인 저장소 목차 표시 하나만 바꾸고, 다른 데이터는 건드리지 않아요.
-        아무것도 인터넷으로 보내지 않아요. 다른 리스 탭이 열려 있다면 닫고 실행해 주세요.</p>
+      <p class="note">이 도구가 직접 바꾸는 건 리스 데이터베이스 안의 플러그인 저장소 목차 표시 하나뿐이에요. 아무것도 인터넷으로 보내지 않아요.</p>
     </div>`;
   document.body.appendChild(host);
 
   const status = root.querySelector('.status');
   const detail = root.querySelector('.detail');
   const confirmBox = root.querySelector('.confirm');
+  const confirmList = root.querySelector('.confirm-list');
   const agree = root.querySelector('.agree');
   const doReset = root.querySelector('.do-reset');
   const mainActions = root.querySelector('.main-actions');
@@ -582,47 +679,83 @@ function openFixPanel() {
   };
   host.rpfDispose = dispose;
 
-  const renderCandidates = (candidates) => {
-    detail.textContent = '';
+  const addAccountHint = () => {
+    const box = document.createElement('div');
+    box.className = 'alert';
+    box.appendChild(rpfParagraph('먼저 확인해 주세요', 'warn'));
+    box.appendChild(rpfParagraph(RPF_ACCOUNT_HINT));
+    detail.appendChild(box);
+  };
+
+  const renderCandidates = (result) => {
+    const { candidates } = result;
+    if (result.accountHint) addAccountHint();
     if (candidates.length === 0) {
-      const none = document.createElement('p');
-      none.textContent = '살아 있는 예전 목차는 찾지 못했어요. 이 목차에 있던 값들은 이 기기에서 이미 읽을 수 없는 상태예요.'
-        + ' 초기화하면 없는 목차를 가리키는 표시만 지우고, 플러그인들이 빈 저장소로 새로 시작해요.';
-      detail.appendChild(none);
-      return;
+      detail.appendChild(rpfParagraph('살아 있는 예전 목차는 찾지 못했어요. 이 목차에 있던 값들은 이 기기에서 이미 읽을 수 없는 상태예요.'
+        + ' 초기화하면 없는 목차를 가리키는 표시만 지우고, 플러그인 저장소가 새로 시작해요.'));
+    } else {
+      detail.appendChild(rpfParagraph(`살아 있는 예전 목차(플러그인 데이터를 저장해 둔 시점)를 ${candidates.length}개 찾았어요. `
+        + '하나를 고르면 그 시점의 플러그인 데이터로 돌아가요 (맨 위가 가장 최근).'));
+      candidates.forEach((candidate, index) => {
+        const row = document.createElement('label');
+        row.className = 'candidate';
+        const radio = document.createElement('input');
+        radio.type = 'radio';
+        radio.name = 'candidate';
+        radio.value = candidate.id;
+        // With an account trace the newest local copy may be older than the account's data, so
+        // nothing is preselected and the user has to pick deliberately.
+        radio.checked = index === 0 && !result.accountHint;
+        const text = document.createElement('div');
+        const title = document.createElement('div');
+        title.textContent = `${rpfFormatTime(candidate.lastModified)} · 값 ${candidate.keyCount}개`;
+        text.appendChild(title);
+        if (candidate.sampleKeys.length > 0) {
+          const keys = document.createElement('div');
+          keys.className = 'keys';
+          const more = candidate.keyCount > candidate.sampleKeys.length ? ' …' : '';
+          keys.textContent = `예: ${candidate.sampleKeys.join(', ')}${more}`;
+          text.appendChild(keys);
+        }
+        if (candidate.missingLarge > 0) {
+          const missing = document.createElement('div');
+          missing.className = 'keys error';
+          missing.textContent = `큰 값 ${candidate.largeCount}개 중 ${candidate.missingLarge}개는 파일이 없어서 빈 값으로 읽혀요. `
+            + '이 시점을 고르면 리스 백업 때 "불완전" 확인이 뜨거나 계정 동기화가 거절될 수 있어요 (플러그인이 그 값을 다시 저장하면 풀려요).';
+          text.appendChild(missing);
+        }
+        row.appendChild(radio);
+        row.appendChild(text);
+        detail.appendChild(row);
+      });
+      detail.appendChild(rpfParagraph('되살린 뒤에는 리스가 정리 시점이 지난 예전 파일을 지울 수 있어서, 다른 시점으로 다시 바꾸기는 어려워요.', 'note'));
     }
-    const intro = document.createElement('p');
-    intro.textContent = `살아 있는 예전 목차를 ${candidates.length}개 찾았어요. 하나를 고르면 그 목차가 저장된 시점의 플러그인 데이터로 돌아가요 (맨 위가 가장 최근).`;
-    detail.appendChild(intro);
-    candidates.forEach((candidate, index) => {
-      const row = document.createElement('label');
-      row.className = 'candidate';
-      const radio = document.createElement('input');
-      radio.type = 'radio';
-      radio.name = 'candidate';
-      radio.value = candidate.id;
-      radio.checked = index === 0;
-      const text = document.createElement('div');
-      const title = document.createElement('div');
-      title.textContent = `${rpfFormatTime(candidate.lastModified)} · 값 ${candidate.keyCount}개`;
-      text.appendChild(title);
-      if (candidate.sampleKeys.length > 0) {
-        const keys = document.createElement('div');
-        keys.className = 'keys';
-        const more = candidate.keyCount > candidate.sampleKeys.length ? ' …' : '';
-        keys.textContent = `예: ${candidate.sampleKeys.join(', ')}${more}`;
-        text.appendChild(keys);
-      }
-      if (candidate.missingLarge > 0) {
-        const missing = document.createElement('div');
-        missing.className = 'keys error';
-        missing.textContent = `큰 값 ${candidate.largeCount}개 중 ${candidate.missingLarge}개는 파일이 없어서 빈 값으로 읽혀요.`;
-        text.appendChild(missing);
-      }
-      row.appendChild(radio);
-      row.appendChild(text);
-      detail.appendChild(row);
-    });
+    if (result.uncertainCount > 0) {
+      detail.appendChild(rpfParagraph(`파일 ${result.uncertainCount}개는 확실하게 읽지 못해서 후보에서 뺐어요. `
+        + '다른 리스 탭을 닫고 새로고침한 뒤 다시 확인하면 보일 수도 있어요.', 'note'));
+    }
+  };
+
+  const fillConfirm = () => {
+    confirmList.textContent = '';
+    const items = [];
+    const count = diagnosis && diagnosis.candidates ? diagnosis.candidates.length : 0;
+    if (count > 0) {
+      items.push(`되살릴 수 있는 예전 목차가 ${count}개 있는데, 그걸 쓰지 않고 새로 시작해요. 초기화한 뒤에는 이 도구가 그 목차들을 다시 보여 주지 않아요.`);
+    } else {
+      items.push('지워지는 건 없어진 목차를 가리키는 표시 하나뿐이에요. 그 목차에 있던 값들은 이미 이 기기에서 읽을 수 없는 상태예요.');
+    }
+    items.push('리스 플러그인 저장소는 플러그인끼리 나눠 쓰는 한 칸이라, 한 플러그인 몫만 골라 지울 수는 없어요. '
+      + '플러그인이 이 저장소에 넣어 두던 데이터(예: CPM 사용량 기록)는 새로 시작해요. 옛 방식으로 따로 남아 있던 값은 다시 들어와요.');
+    items.push('그대로 남는 것: 캐릭터·채팅·설정, 리스에 설치된 플러그인과 그 설정값, 플러그인의 로컬 저장소(safeLocalStorage·IndexedDB).');
+    items.push(diagnosis && diagnosis.accountHint
+      ? RPF_ACCOUNT_HINT
+      : '최근에 Risu 계정 로그아웃이나 "계정에 저장" 끄기를 했다면, 목차가 계정 쪽에 남아 있을 수도 있어요 (이 도구로는 확인할 수 없어요). 그렇다면 그쪽부터 확인해 보세요.');
+    for (const text of items) {
+      const item = document.createElement('li');
+      item.textContent = text;
+      confirmList.appendChild(item);
+    }
   };
 
   const render = (result) => {
@@ -644,6 +777,11 @@ function openFixPanel() {
       showButtons([]);
       return;
     }
+    if (result.state === 'unsupported-browser') {
+      setStatus(RPF_BROWSER_TEXT[result.missing] || RPF_BROWSER_TEXT.opfs, 'error');
+      showButtons([]);
+      return;
+    }
     if (result.state === 'no-index') {
       setStatus('✅ 플러그인 저장소는 정상이에요 (아직 저장된 값이 없어요). 고칠 게 없어요.', 'ok');
       showButtons([]);
@@ -655,11 +793,18 @@ function openFixPanel() {
       showButtons([]);
       return;
     }
+    if (result.state === 'uncertain') {
+      setStatus('⚠ 플러그인 저장소 목차 파일이 있긴 한데, 이 도구가 확실하게 읽지 못했어요 (잠겨 있거나, 리스는 읽을 수 있는 형태일 수도 있어요).\n'
+        + '안전을 위해 아무것도 바꾸지 않았어요. 다른 리스 탭을 닫고 새로고침한 뒤 다시 확인해 주세요.', 'error');
+      if (result.accountHint) addAccountHint();
+      showButtons([rerunButton]);
+      return;
+    }
     const why = result.reason === 'unreadable'
       ? '플러그인 저장소 목차 파일이 손상돼서 읽을 수 없어요.'
       : '플러그인 저장소 목차 파일이 이 브라우저에 없어요.';
     setStatus(`❌ ${why}\n그래서 리스가 모든 플러그인의 저장소 요청을 거부하고 있어요 (Failed to load plugin storage index).`, 'error');
-    renderCandidates(result.candidates);
+    renderCandidates(result);
     const buttons = [resetButton];
     if (result.candidates.length > 0) buttons.unshift(recoverButton);
     showButtons(buttons);
@@ -697,6 +842,15 @@ function openFixPanel() {
 
   const runRepair = async (action) => {
     if (!diagnosis || diagnosis.state !== 'broken') return;
+    let candidateId = null;
+    if (action === 'recover') {
+      const picked = root.querySelector('input[name="candidate"]:checked');
+      if (!picked) {
+        setStatus('되살릴 시점을 하나 골라 주세요.', 'error');
+        return;
+      }
+      candidateId = picked.value;
+    }
     const run = new AbortController();
     running = run;
     showButtons([]);
@@ -704,13 +858,7 @@ function openFixPanel() {
     setStatus('바꾸는 중… 리스가 저장을 마칠 때까지 기다리고 있어요 (보통 몇 초, 최대 1분). 창을 닫지 마세요.');
     try {
       if (action === 'recover') {
-        const picked = root.querySelector('input[name="candidate"]:checked');
-        if (!picked) {
-          setStatus('되살릴 목차를 하나 골라 주세요.', 'error');
-          showButtons([recoverButton, resetButton]);
-          return;
-        }
-        await RisuPluginStorageFix.recover(env, { pointer: diagnosis.pointer, candidateId: picked.value, signal: run.signal });
+        await RisuPluginStorageFix.recover(env, { pointer: diagnosis.pointer, candidateId, signal: run.signal });
       } else {
         await RisuPluginStorageFix.reset(env, { pointer: diagnosis.pointer, signal: run.signal });
       }
@@ -718,8 +866,8 @@ function openFixPanel() {
       detail.textContent = '';
       const reloadHint = '\n브라우저가 "사이트에서 나가시겠습니까?"라고 물으면 새로고침(나가기)을 눌러 주세요. 저장은 이미 끝났어요.';
       setStatus((action === 'recover'
-        ? '✅ 예전 목차로 되돌리고, 리스 저장 파일에 반영된 것까지 확인했어요.\n"지금 새로고침"을 누르면 플러그인들이 되살린 데이터로 다시 시작해요.'
-        : '✅ 없는 목차 표시를 지우고, 리스 저장 파일에 반영된 것까지 확인했어요.\n"지금 새로고침"을 누르면 플러그인들이 빈 저장소로 다시 시작해요.') + reloadHint, 'ok');
+        ? '✅ 고른 시점의 목차로 되돌리고, 리스 저장 파일에 반영된 것까지 확인했어요.\n"지금 새로고침"을 누르면 플러그인들이 되살린 데이터로 다시 시작해요.'
+        : '✅ 없는 목차 표시를 지우고, 리스 저장 파일에 반영된 것까지 확인했어요.\n"지금 새로고침"을 누르면 플러그인 저장소가 새로 시작해요.') + reloadHint, 'ok');
       showButtons([reloadButton]);
     } catch (error) {
       if (run.signal.aborted) return;
@@ -739,6 +887,7 @@ function openFixPanel() {
   rerunButton.addEventListener('click', runDiagnose);
   recoverButton.addEventListener('click', () => runRepair('recover'));
   resetButton.addEventListener('click', () => {
+    fillConfirm();
     confirmBox.hidden = false;
     agree.checked = false;
     doReset.disabled = true;

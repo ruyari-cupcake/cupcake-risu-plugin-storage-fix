@@ -12,6 +12,7 @@ const RisuPluginStorageFix = (() => {
   // was already running when the pointer changed has to finish first; a timeout only reports.
   const DEFAULT_SAVE_TIMEOUT_MS = 60000;
   const SAVE_POLL_INTERVAL_MS = 500;
+  const SAVE_UNKNOWN_RETRY_COUNT = 3;
   const DATABASE_KEY = 'database/database.bin';
   const DATABASE_NAME = 'risuai';
   const OBJECT_STORE = 'keyvaluepairs';
@@ -23,6 +24,9 @@ const RisuPluginStorageFix = (() => {
     NOT_RISU: '리스 플러그인 API를 찾지 못했어요. 리스가 열린 탭에서 실행해 주세요.',
     NOT_READY: '리스 데이터베이스가 아직 준비되지 않았어요. 로딩이 끝난 뒤 다시 실행해 주세요.',
     UNSUPPORTED_BACKEND: '계정·노드·데스크톱 저장소는 이 도구로 고치지 않아요. 일시적인 연결 문제일 수도 있어요.',
+    UNSUPPORTED_BROWSER: '이 브라우저에서는 저장소를 안전하게 확인할 수 없어요. OPFS와 gzip 읽기를 지원하는 브라우저에서 실행해 주세요.',
+    UNCERTAIN: '인덱스 파일을 확실하게 읽을 수 없어서 변경하지 않았어요. 다른 리스 탭을 닫고 새로고침한 뒤 다시 실행해 주세요.',
+    NOT_SETTLED: '현재 탭과 저장 파일의 인덱스가 일치하지 않아 변경하지 않았어요. 다른 리스 탭을 닫고 새로고침한 뒤 다시 실행해 주세요.',
     NOT_BROKEN: '현재 플러그인 저장소는 끊어진 인덱스를 가리키고 있지 않아요. 변경하지 않았어요.',
     CHANGED: '진단 뒤 플러그인 저장소가 달라졌어요. 다시 진단해 주세요.',
     CANDIDATE_INVALID: '복구할 인덱스를 다시 읽을 수 없어요. 다시 진단해 주세요.',
@@ -101,6 +105,9 @@ const RisuPluginStorageFix = (() => {
       get localStorage() { return globalObj.localStorage; },
       get isNode() { return Boolean(globalObj.__NODE__); },
       get isTauri() { return Boolean(globalObj.__TAURI_INTERNALS__ || globalObj.window?.__TAURI_INTERNALS__); },
+      get hasOpfs() { return typeof globalObj.navigator?.storage?.getDirectory === 'function'; },
+      get hasDecompression() { return typeof globalObj.DecompressionStream === 'function'; },
+      get opfsWritable() { return typeof globalObj.FileSystemFileHandle?.prototype?.createWritable === 'function'; },
       opfsRoot: () => globalObj.navigator.storage.getDirectory(),
       forage: {
         keys: () => readStore('keys', undefined, []),
@@ -126,11 +133,26 @@ const RisuPluginStorageFix = (() => {
     if (backend(env) !== 'web') throw new FixError('UNSUPPORTED_BACKEND');
   }
 
+  function missingCapability(env) {
+    if (!env.hasOpfs) return 'opfs';
+    if (!env.hasDecompression) return 'decompression';
+    return null;
+  }
+
+  function requireBrowser(env) {
+    requireWeb(env);
+    if (missingCapability(env)) throw new FixError('UNSUPPORTED_BROWSER');
+  }
+
   function liveStorage(env) {
     const apis = env.pluginApis();
     if (!apis || typeof apis.getDatabase !== 'function') throw new FixError('NOT_RISU');
-    const storage = apis.getDatabase()?.pluginCustomStorage;
-    if (!storage || typeof storage !== 'object') throw new FixError('NOT_READY');
+    const db = apis.getDatabase();
+    const storage = db?.pluginCustomStorage;
+    if (!storage || typeof storage !== 'object') {
+      if (Array.isArray(db?.plugins)) return null;
+      throw new FixError('NOT_READY');
+    }
     return storage;
   }
 
@@ -180,25 +202,39 @@ const RisuPluginStorageFix = (() => {
   }
 
   async function readIndex(env, root, id, signal, prefixOnly = false, handle) {
+    throwIfCancelled(signal);
+    let fileHandle = handle;
+    if (!fileHandle) {
+      try { fileHandle = await root.getFileHandle(coldName(id)); } catch (error) {
+        throwIfCancelled(signal);
+        if (error?.code === 'CANCELLED') throw error;
+        return { state: error?.name === 'NotFoundError' ? 'missing' : 'uncertain' };
+      }
+    }
+    let file;
+    let bytes;
     try {
-      throwIfCancelled(signal);
-      const fileHandle = handle || await root.getFileHandle(coldName(id));
-      const file = await fileHandle.getFile();
-      const bytes = await readGzip(env, file, signal, prefixOnly);
-      const value = bytes && JSON.parse(new TextDecoder().decode(bytes));
-      throwIfCancelled(signal);
-      if (!isPluginStorageIndex(value)) return { state: 'unreadable' };
-      return { state: 'healthy', index: value, lastModified: file.lastModified };
+      file = await fileHandle.getFile();
+      bytes = await readGzip(env, file, signal, prefixOnly);
     } catch (error) {
       throwIfCancelled(signal);
       if (error?.code === 'CANCELLED') throw error;
-      return { state: error?.name === 'NotFoundError' ? 'missing' : 'unreadable' };
+      // Stock's fflate decoder can accept bytes that DecompressionStream rejects, so a
+      // decoding/access failure cannot establish that stock would lose this index too.
+      return { state: 'uncertain' };
     }
+    throwIfCancelled(signal);
+    let value;
+    try { value = bytes && JSON.parse(new TextDecoder().decode(bytes)); } catch (error) {
+      return { state: 'unreadable' };
+    }
+    if (!isPluginStorageIndex(value)) return { state: 'unreadable' };
+    return { state: 'healthy', index: value, lastModified: file.lastModified };
   }
 
-  async function findCandidates(env, { excludeId, signal, onProgress } = {}) {
+  async function scanCandidates(env, { excludeId, signal, onProgress } = {}) {
     throwIfCancelled(signal);
-    requireWeb(env);
+    requireBrowser(env);
     const root = await env.opfsRoot();
     const files = [];
     const names = new Set();
@@ -209,6 +245,7 @@ const RisuPluginStorageFix = (() => {
       if (name.startsWith('coldstorage_') && name.endsWith('.json')) files.push([name, handle]);
     }
     const candidates = [];
+    let uncertainCount = 0;
     let done = 0;
     if (onProgress) onProgress(done, files.length);
     for (const [name, handle] of files) {
@@ -216,6 +253,7 @@ const RisuPluginStorageFix = (() => {
       const id = name.slice('coldstorage_'.length, -'.json'.length);
       if (id !== excludeId) {
         const result = await readIndex(env, root, id, signal, true, handle);
+        if (result.state === 'uncertain') uncertainCount += 1;
         if (result.state === 'healthy') {
           // Same entry filter as stock doLoad: entries without a string key are skipped there too.
           const entries = result.index.entries.filter((entry) => typeof entry?.k === 'string');
@@ -229,7 +267,11 @@ const RisuPluginStorageFix = (() => {
       if (onProgress) onProgress(done, files.length);
     }
     throwIfCancelled(signal);
-    return candidates.sort((a, b) => b.lastModified - a.lastModified);
+    return { candidates: candidates.sort((a, b) => b.lastModified - a.lastModified), uncertainCount };
+  }
+
+  async function findCandidates(env, options = {}) {
+    return (await scanCandidates(env, options)).candidates;
   }
 
   async function diagnose(env, { signal, onProgress } = {}) {
@@ -242,19 +284,24 @@ const RisuPluginStorageFix = (() => {
     }
     const selectedBackend = backend(env);
     if (selectedBackend !== 'web') return { state: 'unsupported-backend', backend: selectedBackend };
-    const pointer = storage[POINTER_KEY];
+    const missing = missingCapability(env);
+    if (missing) return { state: 'unsupported-browser', backend: 'web', missing };
+    const pointer = storage?.[POINTER_KEY];
     if (typeof pointer !== 'string') return { state: 'no-index', backend: 'web' };
     const root = await env.opfsRoot();
     const result = await readIndex(env, root, pointer, signal);
     if (result.state === 'healthy') return { state: 'healthy', backend: 'web', pointer, keyCount: result.index.entries.length };
-    const candidates = await findCandidates(env, { excludeId: pointer, signal, onProgress });
-    return { state: 'broken', backend: 'web', pointer, reason: result.state, candidates };
+    const accountHint = env.localStorage.getItem('dosync') === 'avoid';
+    if (result.state === 'uncertain') return { state: 'uncertain', backend: 'web', pointer, accountHint };
+    const { candidates, uncertainCount } = await scanCandidates(env, { excludeId: pointer, signal, onProgress });
+    return { state: 'broken', backend: 'web', pointer, reason: result.state, candidates, uncertainCount, accountHint };
   }
 
   function checkLive(env, pointer, signal) {
     throwIfCancelled(signal);
-    requireWeb(env);
+    requireBrowser(env);
     const storage = liveStorage(env);
+    if (!storage) throw new FixError('NOT_BROKEN');
     if (storage[POINTER_KEY] !== pointer) throw new FixError('CHANGED');
     if (typeof pointer !== 'string') throw new FixError('NOT_BROKEN');
     return storage;
@@ -266,7 +313,28 @@ const RisuPluginStorageFix = (() => {
     const current = await readIndex(env, root, pointer, signal);
     const storage = checkLive(env, pointer, signal);
     if (current.state === 'healthy') throw new FixError('NOT_BROKEN');
+    if (current.state !== 'missing' && current.state !== 'unreadable') throw new FixError('UNCERTAIN');
     return { storage, root };
+  }
+
+  // Both edit paths require a settled disk snapshot and own the same pre-edit receipt baseline.
+  // Recheck after the disk read: another tab/plugin may have changed the live state while it yielded.
+  async function prepareEdit(env, pointer, signal) {
+    await checkBroken(env, pointer, signal);
+    const location = await databaseLocation(env);
+    const saved = await readAtLocation(env, location);
+    checkLive(env, pointer, signal);
+    if (saved.format !== 'risusave' || !saved.hasBlock || saved.pointer !== pointer) throw new FixError('NOT_SETTLED');
+    const { root } = await checkBroken(env, pointer, signal);
+    const baseline = await latestBackup(env, location, signal);
+    checkLive(env, pointer, signal);
+    return { root, location, baseline };
+  }
+
+  async function acceptsPersistedPointer(env, root, saved, target, deadPointer, signal) {
+    if (saved === target) return true;
+    if (typeof saved !== 'string' || saved === deadPointer) return false;
+    return (await readIndex(env, root, saved, signal)).state === 'healthy';
   }
 
   async function recover(env, { pointer, candidateId, signal, timeoutMs } = {}) {
@@ -275,17 +343,19 @@ const RisuPluginStorageFix = (() => {
     const candidate = await readIndex(env, root, candidateId, signal);
     if (candidate.state !== 'healthy') throw new FixError('CANDIDATE_INVALID');
     // The candidate read yields: a concurrent plugin write or backend switch must still win.
-    await checkBroken(env, pointer, signal);
+    const { location, baseline } = await prepareEdit(env, pointer, signal);
     const storage = checkLive(env, pointer, signal);
     storage[POINTER_KEY] = candidateId;
-    return await waitForPersisted(env, (saved) => saved === candidateId, { signal, timeoutMs });
+    return await waitForPersisted(env, (saved) => acceptsPersistedPointer(env, root, saved, candidateId, pointer, signal),
+      { signal, timeoutMs, location, baseline });
   }
 
   async function reset(env, { pointer, signal, timeoutMs } = {}) {
-    await checkBroken(env, pointer, signal);
+    const { root, location, baseline } = await prepareEdit(env, pointer, signal);
     const storage = checkLive(env, pointer, signal);
     delete storage[POINTER_KEY];
-    return await waitForPersisted(env, (saved) => saved === null, { signal, timeoutMs });
+    return await waitForPersisted(env, (saved) => acceptsPersistedPointer(env, root, saved, null, pointer, signal),
+      { signal, timeoutMs, location, baseline });
   }
 
   function toHex(text) {
@@ -299,7 +369,7 @@ const RisuPluginStorageFix = (() => {
 
   async function databaseLocation(env) {
     requireWeb(env);
-    if (env.localStorage.getItem('opfs_flag!') === 'able') {
+    if (env.localStorage.getItem('opfs_flag!') === 'able' && env.opfsWritable) {
       // Listing keys is enough to establish absence; do not load a large IDB database just
       // to choose a backend (the stock value is a truthy Uint8Array whenever the key exists).
       const keys = await env.forage.keys();
@@ -389,31 +459,40 @@ const RisuPluginStorageFix = (() => {
   }
 
   // This is a receipt wait only: it never forces a save, rolls back a live edit, or retries it.
-  // Save-loop backups announce a new database write; the backup itself is never read.
-  async function waitForPersisted(env, predicate, { signal, timeoutMs = DEFAULT_SAVE_TIMEOUT_MS } = {}) {
+  // A new backup opens the gate, but OPFS close() may still be in flight. IDB is transactional;
+  // only unknown reads there get a small retry budget before waiting for the next backup.
+  async function waitForPersisted(env, predicate, { signal, timeoutMs = DEFAULT_SAVE_TIMEOUT_MS, location, baseline } = {}) {
     throwIfCancelled(signal);
     requireWeb(env);
     const started = env.now();
-    const location = await databaseLocation(env);
-    let lastBackup = await latestBackup(env, location, signal);
-    let shouldRead = true;
+    location = location || await databaseLocation(env);
+    if (baseline === undefined) baseline = await latestBackup(env, location, signal);
+    let lastBackup = baseline;
+    let unknownRetries = 0;
     while (true) {
       throwIfCancelled(signal);
       requireWeb(env);
+      const latest = await latestBackup(env, location, signal);
+      const newer = latest > lastBackup;
+      lastBackup = Math.max(lastBackup, latest);
+      if (newer) unknownRetries = SAVE_UNKNOWN_RETRY_COUNT;
+      const shouldRead = lastBackup > baseline && (location.kind === 'opfs' || newer || unknownRetries > 0);
       if (shouldRead) {
+        if (!newer) unknownRetries -= 1;
         const saved = await readAtLocation(env, location);
         throwIfCancelled(signal);
         requireWeb(env);
-        // A save file without the plugin storage block reads as "no pointer"; it must never confirm a reset.
-        if (saved.format === 'risusave' && saved.hasBlock && predicate(saved.pointer)) return { confirmed: true };
+        if (saved.format !== 'unknown') unknownRetries = 0;
+        // A save without the block says nothing about the pointer, so it cannot confirm a reset.
+        if (saved.format === 'risusave' && saved.hasBlock && await predicate(saved.pointer)) {
+          throwIfCancelled(signal);
+          requireWeb(env);
+          return { confirmed: true, persistedPointer: saved.pointer };
+        }
       }
       const remaining = timeoutMs - (env.now() - started);
       if (remaining <= 0) throw new FixError('SAVE_UNCONFIRMED');
       await env.sleep(Math.min(SAVE_POLL_INTERVAL_MS, remaining));
-      throwIfCancelled(signal);
-      const latest = await latestBackup(env, location, signal);
-      shouldRead = latest > lastBackup;
-      lastBackup = Math.max(lastBackup, latest);
     }
   }
 

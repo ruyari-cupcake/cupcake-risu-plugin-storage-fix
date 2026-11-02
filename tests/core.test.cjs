@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const { gzipSync, gunzipSync } = require('node:zlib');
+const { gzipSync, gunzipSync, inflateRawSync } = require('node:zlib');
 const corePath = path.join(__dirname, '../src/core.js');
 const core = fs.existsSync(corePath) ? require(corePath) : {};
 const TYPE = 'risu-plugin-storage-index';
@@ -58,15 +58,22 @@ function stockSaveView(bytes) {
   return { blocks, storage: JSON.parse(blocks.find((item) => item.type === 11).data.toString()) };
 }
 
+async function confirms(promise) {
+  let result;
+  await assert.doesNotReject(async () => { result = await promise; }, 'a valid post-edit save must produce a receipt');
+  return result;
+}
+
 function fixture({ storage = { _coldpluginIndex: 'dead' }, location = 'idb', flags = {} } = {}) {
   const local = new Map(Object.entries(flags));
   if (location === 'opfs') local.set('opfs_flag!', 'able');
   const files = new Map();
   const forage = new Map();
   const calls = { root: 0, keys: 0, get: [], files: [], slices: [], writes: [], sleeps: 0, cancelled: 0 };
+  let onWrite = () => {};
   const live = new Proxy(storage, {
-    set(target, key, value) { calls.writes.push(['set', key, value]); target[key] = value; return true; },
-    deleteProperty(target, key) { calls.writes.push(['delete', key]); return delete target[key]; },
+    set(target, key, value) { calls.writes.push(['set', key, value]); target[key] = value; onWrite(); return true; },
+    deleteProperty(target, key) { calls.writes.push(['delete', key]); const result = delete target[key]; onWrite(); return result; },
   });
   let clock = 100;
   let onSleep = async () => {};
@@ -103,6 +110,9 @@ function fixture({ storage = { _coldpluginIndex: 'dead' }, location = 'idb', fla
     localStorage: { getItem: (key) => local.get(key) ?? null, setItem() { assert.fail('localStorage write'); } },
     isNode: false,
     isTauri: false,
+    hasOpfs: true,
+    hasDecompression: true,
+    opfsWritable: true,
     opfsRoot: async () => { calls.root += 1; return root; },
     forage: {
       keys: async () => { calls.keys += 1; return [...forage.keys()]; },
@@ -142,7 +152,7 @@ function fixture({ storage = { _coldpluginIndex: 'dead' }, location = 'idb', fla
     return Buffer.from(location === 'opfs' ? files.get(hex(DB)).bytes : forage.get(DB));
   }
   return { env, live, files, forage, local, calls, add, putDatabase, persist, persisted,
-    onSleep(fn) { onSleep = fn; }, onFile(fn) { onFile = fn; } };
+    onSleep(fn) { onSleep = fn; }, onFile(fn) { onFile = fn; }, onWrite(fn) { onWrite = fn; } };
 }
 
 function untouched(f) {
@@ -183,9 +193,9 @@ test('diagnose distinguishes not-risu, not-ready, no-index, healthy, missing and
   const before = untouched(f);
   const broken = fixture();
   assert.deepEqual(await diagnose(broken.env), {
-    state: 'broken', backend: 'web', pointer: 'dead', reason: 'missing', candidates: [],
+    state: 'broken', backend: 'web', pointer: 'dead', reason: 'missing', candidates: [], uncertainCount: 0, accountHint: false,
   });
-  for (const bad of [Buffer.from('bad gzip'), gzipSync('not JSON'), gzipSync(JSON.stringify({ type: TYPE, entries: [] }))]) {
+  for (const bad of [gzipSync('not JSON'), gzipSync(JSON.stringify({ type: TYPE, entries: [] }))]) {
     broken.files.set(coldName('dead'), { bytes: bad, time: 5 });
     const result = await diagnose(broken.env);
     assert.equal(result.reason, 'unreadable');
@@ -294,7 +304,7 @@ test('recover sets only the live pointer, confirms a new save and reopens exact 
       if (sleeps === 2) f.persist({ number: 12 });
     });
     assert.throws(() => reopen(f, { _coldpluginIndex: 'dead' }), /Failed to load/);
-    assert.deepEqual(await recover(f.env, { pointer: 'dead', candidateId: 'good', timeoutMs: 5000 }), { confirmed: true });
+    assert.deepEqual(await recover(f.env, { pointer: 'dead', candidateId: 'good', timeoutMs: 5000 }), { confirmed: true, persistedPointer: 'good' });
     assert.equal(sleeps, 2, 'the stale in-flight save must not confirm success');
     assert.deepEqual(f.calls.writes, [['set', '_coldpluginIndex', 'good']]);
     assert.strictEqual(f.live.inline, legacy);
@@ -318,7 +328,7 @@ test('reset deletes rather than nulls only the pointer, preserves references and
   const original = untouched(f);
   const before = stockSaveView(f.persisted());
   f.onSleep(() => f.persist({ number: 2 }));
-  assert.deepEqual(await reset(f.env, { pointer: 'dead', timeoutMs: 3000 }), { confirmed: true });
+  assert.deepEqual(await reset(f.env, { pointer: 'dead', timeoutMs: 3000 }), { confirmed: true, persistedPointer: null });
   assert.equal(Object.hasOwn(f.live, '_coldpluginIndex'), false);
   assert.strictEqual(f.live.legacy, legacy);
   assert.strictEqual(f.live._coldplugin, map);
@@ -430,6 +440,7 @@ test('location selection respects OPFS flag, migrated and existing IndexedDB dat
 test('missing/foreign/damaged save files never falsely confirm an absent pointer', async () => {
   const read = api('readPersistedPointer');
   const f = fixture();
+  f.onSleep(() => f.forage.set(`${BACKUP}${f.calls.sleeps}.bin`, new Uint8Array()));
   assert.deepEqual(await read(f.env), { format: 'unknown' });
   for (const bytes of [Buffer.from('other'), Buffer.from('RISUSAVE\0\x0b'),
     Buffer.concat([Buffer.from('RISUSAVE\0'), block(11, 'pluginStorage', Buffer.from('{broken'))]),
@@ -446,7 +457,7 @@ test('missing/foreign/damaged save files never falsely confirm an absent pointer
   await assert.rejects(core.waitForPersisted(f.env, (pointer) => pointer === null, { timeoutMs: 1 }), { code: 'SAVE_UNCONFIRMED' });
 });
 
-test('wait gate reads once initially and only for a strictly newer numeric backup, never trusting the live object', async () => {
+test('wait gate reads only after a strictly newer numeric backup, never trusting the live object', async () => {
   const wait = api('waitForPersisted');
   for (const location of ['idb', 'opfs']) {
     const f = fixture({ location, storage: { _coldpluginIndex: 'new' } });
@@ -462,10 +473,10 @@ test('wait gate reads once initially and only for a strictly newer numeric backu
       }
       if (ticks === 3) f.persist({ number: 101 });
     });
-    assert.deepEqual(await wait(f.env, (pointer) => pointer === 'new', { timeoutMs: 5000 }), { confirmed: true });
+    assert.deepEqual(await wait(f.env, (pointer) => pointer === 'new', { timeoutMs: 5000 }), { confirmed: true, persistedPointer: 'new' });
     assert.equal(ticks, 3, 'unannounced DB write and older backup do not permit a re-read');
     const reads = location === 'idb' ? f.calls.get.filter((key) => key === DB).length : f.calls.files.filter((key) => key === hex(DB)).length;
-    assert.equal(reads, 2);
+    assert.equal(reads, 1, 'no initial database read can be used as an edit receipt');
   }
 });
 
@@ -482,6 +493,7 @@ test('wait timeouts and cancellation are typed, including after an awaited read 
   await assert.rejects(wait(f.env, () => true, { signal: early.signal }), { code: 'CANCELLED' });
   assert.equal(f.calls.root, rootCalls);
   const late = new AbortController();
+  f.onSleep(() => f.persist({ number: 101 }));
   const get = f.env.forage.getItem;
   f.env.forage.getItem = async (key) => { const value = await get(key); late.abort(); return value; };
   await assert.rejects(wait(f.env, () => true, { signal: late.signal }), { code: 'CANCELLED' });
@@ -559,10 +571,356 @@ test('browser env is lazy, uses injected APIs and read-only IndexedDB, aborting 
   assert.equal(await new Response(stream).text(), 'compressed via independent fixture');
 });
 
+test('round1 unsettled persisted databases refuse both edits without any mutation', async (t) => {
+  for (const location of ['idb', 'opfs']) for (const method of ['recover', 'reset']) {
+    for (const disk of ['target', 'absent', 'unknown', 'no-block']) await t.test(`${location} ${method} ${disk}`, async () => {
+      const legacy = { nested: ['keep'] };
+      const f = fixture({ location, storage: { _coldpluginIndex: 'dead', legacy } });
+      f.add('good', index([{ k: 'restored', s: '42' }]));
+      if (disk === 'target') f.putDatabase(save({ _coldpluginIndex: 'good' }));
+      if (disk === 'absent') f.putDatabase(save({}));
+      if (disk === 'unknown') f.putDatabase(Buffer.from('not a save'));
+      if (disk === 'no-block') f.putDatabase(Buffer.concat([Buffer.from('RISUSAVE\0'), block(0, 'root', {})]));
+      const before = untouched(f);
+      await assert.rejects(core[method](f.env, { pointer: 'dead', candidateId: 'good', timeoutMs: 1 }), (error) =>
+        error instanceof core.FixError && error.code === 'NOT_SETTLED' && /다른.*탭/.test(error.message) && /다시/.test(error.message));
+      assert.deepEqual(f.calls.writes, []);
+      assert.equal(f.live._coldpluginIndex, 'dead');
+      assert.strictEqual(f.live.legacy, legacy);
+      assert.deepEqual(untouched(f), before);
+    });
+  }
+});
+
+test('round1 an initially matching disk value cannot confirm before a post-baseline save', async (t) => {
+  for (const location of ['idb', 'opfs']) await t.test(location, async () => {
+    const f = fixture({ location });
+    f.persist({ number: 1, from: { _coldpluginIndex: 'good' } });
+    let ticks = 0;
+    f.onSleep(() => {
+      ticks += 1;
+      f.persist({ number: ticks + 1, from: { _coldpluginIndex: ticks === 1 ? 'dead' : 'good' } });
+    });
+    const result = await core.waitForPersisted(f.env, (pointer) => pointer === 'good', { timeoutMs: 3000 });
+    assert.equal(ticks, 2, 'initially matching bytes precede a stale in-flight write, not this edit');
+    assert.deepEqual(result, { confirmed: true, persistedPointer: 'good' });
+    assert.equal(stockSaveView(f.persisted()).storage._coldpluginIndex, 'good');
+  });
+});
+
+test('round1 receipt baseline is captured before the live edit, including an immediate save', async (t) => {
+  for (const location of ['idb', 'opfs']) for (const method of ['recover', 'reset']) await t.test(`${location} ${method}`, async () => {
+    const f = fixture({ location });
+    f.add('good', index());
+    f.persist({ number: 1 });
+    f.onWrite(() => f.persist({ number: 2 }));
+    const result = await confirms(core[method](f.env, { pointer: 'dead', candidateId: 'good', timeoutMs: 1000 }));
+    assert.equal(f.calls.sleeps, 0, 'a save triggered by the edit is strictly newer than the captured baseline');
+    assert.deepEqual(result, { confirmed: true, persistedPointer: method === 'recover' ? 'good' : null });
+    assert.equal(f.calls.writes.length, 1);
+  });
+});
+
+test('round1 OPFS retries after the backup name appears before database close', async (t) => {
+  for (const method of ['recover', 'reset']) await t.test(method, async () => {
+    const f = fixture({ location: 'opfs' });
+    f.add('good', index([{ k: 'saved', s: 'true' }]));
+    f.persist({ number: 1 });
+    let ticks = 0;
+    f.onSleep(() => {
+      ticks += 1;
+      if (ticks === 1) f.files.set(hex(`${BACKUP}2.bin`), { bytes: Buffer.alloc(0), time: 1 });
+      if (ticks === 2) f.putDatabase(save(f.live));
+    });
+    const result = await confirms(core[method](f.env, { pointer: 'dead', candidateId: 'good', timeoutMs: 2000 }));
+    assert.deepEqual(result, { confirmed: true, persistedPointer: method === 'recover' ? 'good' : null });
+    assert.equal(ticks, 2);
+    assert.deepEqual(reopen(f, stockSaveView(f.persisted()).storage), method === 'recover' ? index([{ k: 'saved', s: 'true' }]) : index());
+  });
+});
+
+test('round1 IndexedDB unknown receipts retry without another backup, but retries are bounded', async (t) => {
+  await t.test('transient unknown then exact saved target', async () => {
+    const f = fixture();
+    f.add('good', index([{ k: 'value', s: '{"kept":true}' }]));
+    f.persist({ number: 1 });
+    let ticks = 0;
+    f.onSleep(() => {
+      ticks += 1;
+      if (ticks === 1) {
+        f.forage.set(`${BACKUP}2.bin`, new Uint8Array());
+        f.putDatabase(Buffer.from('temporarily unknown'));
+      }
+      if (ticks === 2) f.putDatabase(save(f.live));
+    });
+    const result = await core.recover(f.env, { pointer: 'dead', candidateId: 'good', timeoutMs: 2000 });
+    assert.deepEqual(result, { confirmed: true, persistedPointer: 'good' });
+    assert.equal(ticks, 2);
+    assert.deepEqual(reopen(f, stockSaveView(f.persisted()).storage), index([{ k: 'value', s: '{"kept":true}' }]));
+  });
+  await t.test('exhausted unknown retries rearm only on a newer backup', async () => {
+    const f = fixture();
+    f.persist({ number: 1 });
+    let ticks = 0;
+    const reads = [];
+    f.onSleep(() => {
+      ticks += 1;
+      reads.push(f.calls.get.filter((key) => key === DB).length);
+      if (ticks === 1) {
+        f.forage.set(`${BACKUP}2.bin`, new Uint8Array());
+        f.putDatabase(Buffer.from('unknown'));
+      }
+      if (ticks === 8) f.putDatabase(save({}));
+      if (ticks === 10) f.forage.set(`${BACKUP}3.bin`, new Uint8Array());
+    });
+    assert.deepEqual(await core.waitForPersisted(f.env, (pointer) => pointer === null, { timeoutMs: 6000 }),
+      { confirmed: true, persistedPointer: null });
+    assert.equal(ticks, 10, 'exhausted IDB retries must await another backup even if bytes change');
+    assert.ok(reads[7] > 1 && reads[7] <= 5, 'unknown retries are bounded, not one read or polling forever');
+    assert.equal(reads[7], reads[9]);
+  });
+});
+
+test('round1 a readable stale IndexedDB receipt waits for another backup, not an unannounced byte change', async () => {
+  const f = fixture();
+  f.persist({ number: 1 });
+  let ticks = 0;
+  const reads = [];
+  f.onSleep(() => {
+    ticks += 1;
+    reads.push(f.calls.get.filter((key) => key === DB).length);
+    if (ticks === 1) f.forage.set(`${BACKUP}2.bin`, new Uint8Array());
+    if (ticks === 2) f.putDatabase(save({ _coldpluginIndex: 'good' }));
+    if (ticks === 4) f.forage.set(`${BACKUP}3.bin`, new Uint8Array());
+  });
+  const result = await core.waitForPersisted(f.env, (pointer) => pointer === 'good', { timeoutMs: 3000 });
+  assert.equal(ticks, 4);
+  assert.equal(reads[1], reads[3], 'readable-but-stale IDB bytes do not use the unknown retry budget');
+  assert.deepEqual(result, { confirmed: true, persistedPointer: 'good' });
+});
+
+test('round1 valid successor receipts survive plugin flushes and reopen their exact contents', async (t) => {
+  for (const location of ['idb', 'opfs']) for (const method of ['recover', 'reset']) await t.test(`${location} ${method}`, async () => {
+    const legacy = { nested: ['keep'] };
+    const f = fixture({ location, storage: { _coldpluginIndex: 'dead', legacy } });
+    f.add('good', index([{ k: 'candidate', s: '1' }]));
+    const successor = index([{ k: 'candidate', s: '1' }, { k: 'legacy', s: JSON.stringify(legacy) }, { k: 'new', l: 'payload' }],
+      [{ id: 'good', at: 123, index: true }]);
+    f.add('payload', { body: ['exact large contents'] });
+    f.persist({ number: 1 });
+    const coldBefore = [...f.files].filter(([name]) => name.startsWith('coldstorage_'));
+    f.onSleep(() => {
+      assert.deepEqual(f.calls.writes, [method === 'recover' ? ['set', '_coldpluginIndex', 'good'] : ['delete', '_coldpluginIndex']]);
+      assert.strictEqual(f.live.legacy, legacy);
+      assert.deepEqual([...f.files].filter(([name]) => name.startsWith('coldstorage_')), coldBefore);
+      // Model the host's migration/flush, not a tool-owned cold-file write.
+      f.add('successor', successor);
+      f.live._coldpluginIndex = 'successor';
+      f.persist({ number: 2 });
+    });
+    assert.deepEqual(await core[method](f.env, { pointer: 'dead', candidateId: 'good', timeoutMs: 1500 }),
+      { confirmed: true, persistedPointer: 'successor' });
+    assert.equal(f.calls.sleeps, 1);
+    assert.deepEqual(reopen(f, stockSaveView(f.persisted()).storage), successor);
+    assert.deepEqual(JSON.parse(gunzipSync(f.files.get(coldName('payload')).bytes)), { body: ['exact large contents'] });
+  });
+});
+
+test('round1 unverified successors and the original dead id never confirm', async (t) => {
+  for (const method of ['recover', 'reset']) for (const state of ['missing', 'invalid', 'uncertain', 'dead']) await t.test(`${method} ${state}`, async () => {
+    const f = fixture();
+    f.add('good', index());
+    if (state === 'invalid') f.add('successor', { type: TYPE, entries: [], trash: null });
+    if (state === 'uncertain') f.files.set(coldName('successor'), { bytes: Buffer.from('bad gzip'), time: 1 });
+    f.persist({ number: 1 });
+    f.onSleep(() => {
+      if (state === 'dead') f.add('dead', index([{ k: 'resurrected-old-timeline', s: '1' }]));
+      f.persist({ number: 2, from: { _coldpluginIndex: state === 'dead' ? 'dead' : 'successor' } });
+    });
+    await assert.rejects(core[method](f.env, { pointer: 'dead', candidateId: 'good', timeoutMs: 1000 }), { code: 'SAVE_UNCONFIRMED' });
+    assert.deepEqual(f.calls.writes, [method === 'recover' ? ['set', '_coldpluginIndex', 'good'] : ['delete', '_coldpluginIndex']]);
+  });
+});
+
+test('round1 uncertain index reads never scan candidates or authorize either edit', async (t) => {
+  for (const failure of ['getFile', 'getFileNotFound', 'handleTypeMismatch', 'stream', 'badCRC']) await t.test(failure, async () => {
+    const f = fixture({ flags: { dosync: 'avoid' } });
+    f.add('dead', index([{ k: 'recoverable', s: '42' }]));
+    f.add('good', index());
+    const expected = { state: 'uncertain', backend: 'web', pointer: 'dead', accountHint: true };
+    if (failure === 'getFile' || failure === 'getFileNotFound') {
+      f.files.get(coldName('dead')).error = Object.assign(new Error('file read failed'),
+        { name: failure === 'getFile' ? 'NotAllowedError' : 'NotFoundError' });
+    }
+    if (failure === 'handleTypeMismatch') {
+      const root = await f.env.opfsRoot();
+      const get = root.getFileHandle;
+      root.getFileHandle = (name, options) => name === coldName('dead')
+        ? Promise.reject(Object.assign(new Error('not a file'), { name: 'TypeMismatchError' })) : get(name, options);
+    }
+    if (failure === 'stream') f.env.gunzip = () => new ReadableStream({ start(controller) { controller.error(new Error('I/O failed')); } });
+    if (failure === 'badCRC') {
+      const bytes = f.files.get(coldName('dead')).bytes;
+      bytes[bytes.length - 8] ^= 1;
+      assert.deepEqual(JSON.parse(inflateRawSync(bytes.subarray(10, -8)).toString()), index([{ k: 'recoverable', s: '42' }]),
+        'the raw deflate payload still contains the index, as lenient stock decompression can read');
+    }
+    f.persist({ number: 1 });
+    const before = untouched(f);
+    let scans = 0;
+    assert.deepEqual(await core.diagnose(f.env, { onProgress() { scans += 1; } }), expected);
+    assert.equal(scans, 0);
+    assert.ok(!f.calls.files.includes(coldName('good')), 'uncertain dead pointer must not trigger a candidate scan');
+    for (const method of ['recover', 'reset']) {
+      await assert.rejects(core[method](f.env, { pointer: 'dead', candidateId: 'good', timeoutMs: 1 }), (error) =>
+        error instanceof core.FixError && error.code === 'UNCERTAIN' && /변경하지/.test(error.message));
+    }
+    assert.deepEqual(f.calls.writes, []);
+    assert.deepEqual(untouched(f), before);
+  });
+});
+
+test('round1 uncertainty introduced while validating the candidate also refuses mutation', async () => {
+  const f = fixture();
+  f.add('good', index());
+  f.persist({ number: 1 });
+  f.onFile((name) => {
+    if (name === coldName('good')) f.files.set(coldName('dead'), { bytes: Buffer.from('cannot decode reliably'), time: 1 });
+  });
+  await assert.rejects(core.recover(f.env, { pointer: 'dead', candidateId: 'good', timeoutMs: 1 }), { code: 'UNCERTAIN' });
+  assert.deepEqual(f.calls.writes, []);
+});
+
+test('round1 decoded invalid indexes permit reset while uncertain candidate files are counted', async (t) => {
+  for (const bytes of [gzipSync('not JSON'), gzipSync(JSON.stringify({ type: TYPE, entries: [], trash: null }))]) await t.test(bytes.toString('hex').slice(-16), async () => {
+    const f = fixture();
+    f.files.set(coldName('dead'), { bytes, time: 1 });
+    f.add('good', index([{ k: 'keep', s: 'false' }]));
+    f.files.set(coldName('io-error'), { bytes: Buffer.alloc(0), time: 1, error: new Error('I/O error') });
+    f.files.set(coldName('bad-gzip'), { bytes: Buffer.from('gzip cannot decode'), time: 1 });
+    f.add('bad-shape', { type: TYPE, entries: [], trash: null });
+    f.persist({ number: 1 });
+    const diagnosis = await core.diagnose(f.env);
+    assert.equal(diagnosis.state, 'broken');
+    assert.equal(diagnosis.reason, 'unreadable');
+    assert.equal(diagnosis.uncertainCount, 2);
+    assert.deepEqual(diagnosis.candidates, [{ id: 'good', lastModified: 1, keyCount: 1, sampleKeys: ['keep'], largeCount: 0, missingLarge: 0 }]);
+    assert.deepEqual(await core.findCandidates(f.env, { excludeId: 'dead' }), diagnosis.candidates, 'public candidate API remains an array');
+    f.onSleep(() => f.persist({ number: 2 }));
+    assert.deepEqual(await core.reset(f.env, { pointer: 'dead', timeoutMs: 1000 }), { confirmed: true, persistedPointer: null });
+    assert.equal(Object.hasOwn(f.live, '_coldpluginIndex'), false);
+    assert.deepEqual(reopen(f, stockSaveView(f.persisted()).storage), index());
+  });
+});
+
+test('round1 unsupported browser capability states refuse scans and edits before storage access', async (t) => {
+  for (const [capability, missing] of [['hasOpfs', 'opfs'], ['hasDecompression', 'decompression']]) await t.test(missing, async () => {
+    const f = fixture();
+    f.env[capability] = false;
+    f.env.opfsRoot = () => assert.fail('unsupported browser OPFS access');
+    f.env.forage = new Proxy({}, { get() { assert.fail('unsupported browser IDB access'); } });
+    assert.deepEqual(await core.diagnose(f.env), { state: 'unsupported-browser', backend: 'web', missing });
+    for (const operation of [() => core.findCandidates(f.env), () => core.recover(f.env, { pointer: 'dead', candidateId: 'good' }),
+      () => core.reset(f.env, { pointer: 'dead' })]) await assert.rejects(operation, { code: 'UNSUPPORTED_BROWSER' });
+    assert.deepEqual(f.calls.writes, []);
+    f.local.set('accountst', 'able');
+    assert.deepEqual(await core.diagnose(f.env), { state: 'unsupported-backend', backend: 'account' });
+  });
+});
+
+test('round1 browser capabilities are lazy getters on the injected global object', () => {
+  const globalObj = {};
+  const env = core.createBrowserEnv(globalObj);
+  assert.equal(env.hasOpfs, false);
+  assert.equal(env.hasDecompression, false);
+  assert.equal(env.opfsWritable, false);
+  globalObj.navigator = { storage: { getDirectory() {} } };
+  globalObj.DecompressionStream = DecompressionStream;
+  globalObj.FileSystemFileHandle = function FileSystemFileHandle() {};
+  globalObj.FileSystemFileHandle.prototype.createWritable = () => {};
+  assert.equal(env.hasOpfs, true);
+  assert.equal(env.hasDecompression, true);
+  assert.equal(env.opfsWritable, true);
+  globalObj.navigator.storage.getDirectory = true;
+  globalObj.DecompressionStream = {};
+  globalObj.FileSystemFileHandle.prototype.createWritable = true;
+  assert.equal(env.hasOpfs, false);
+  assert.equal(env.hasDecompression, false);
+  assert.equal(env.opfsWritable, false);
+});
+
+test('round1 createWritable capability controls both database reads and repair receipts', async (t) => {
+  for (const method of ['recover', 'reset']) await t.test(method, async () => {
+    const f = fixture({ flags: { 'opfs_flag!': 'able' } });
+    f.env.opfsWritable = false;
+    f.forage.set('migrated', true);
+    f.persist({ number: 1 });
+    f.files.set(hex(DB), { bytes: save({ _coldpluginIndex: 'opfs-decoy' }), time: 1 });
+    f.add('good', index());
+    assert.equal((await core.readPersistedPointer(f.env)).pointer, 'dead', 'stock keeps IDB without createWritable');
+    f.onSleep(() => f.persist({ number: 2 }));
+    assert.deepEqual(await core[method](f.env, { pointer: 'dead', candidateId: 'good', timeoutMs: 1000 }),
+      { confirmed: true, persistedPointer: method === 'recover' ? 'good' : null });
+    assert.ok(!f.calls.files.includes(hex(DB)));
+  });
+});
+
+test('round1 loaded databases without a plugin storage object are no-index, not not-ready', async (t) => {
+  for (const storage of [undefined, null, 'never-used']) await t.test(String(storage), async () => {
+    const f = fixture();
+    f.env.pluginApis = () => ({ getDatabase: () => ({ plugins: [], pluginCustomStorage: storage }) });
+    assert.deepEqual(await core.diagnose(f.env), { state: 'no-index', backend: 'web' });
+    for (const method of ['recover', 'reset']) await assert.rejects(core[method](f.env, { pointer: 'dead', candidateId: 'good' }), { code: 'NOT_BROKEN' });
+    assert.equal(f.calls.root, 0);
+    assert.equal(f.calls.keys, 0);
+    f.local.set('accountst', 'able');
+    assert.deepEqual(await core.diagnose(f.env), { state: 'unsupported-backend', backend: 'account' });
+  });
+});
+
+test('round1 preflight database reads cannot hide a live pointer, backend, health or cancellation race', async (t) => {
+  for (const method of ['recover', 'reset']) for (const race of ['pointer', 'backend', 'healed', 'abort']) await t.test(`${method} ${race}`, async () => {
+    const f = fixture();
+    const controller = new AbortController();
+    f.add('good', index());
+    f.persist({ number: 1 });
+    const get = f.env.forage.getItem;
+    f.env.forage.getItem = async (key) => {
+      const bytes = await get(key);
+      if (key === DB) {
+        if (race === 'pointer') f.live._coldpluginIndex = 'other';
+        if (race === 'backend') f.env.isNode = true;
+        if (race === 'healed') f.add('dead', index([{ k: 'save-raced', s: '1' }]));
+        if (race === 'abort') controller.abort();
+      }
+      return bytes;
+    };
+    await assert.rejects(core[method](f.env, { pointer: 'dead', candidateId: 'good', signal: controller.signal, timeoutMs: 1 }),
+      { code: { pointer: 'CHANGED', backend: 'UNSUPPORTED_BACKEND', healed: 'NOT_BROKEN', abort: 'CANCELLED' }[race] });
+    assert.deepEqual(f.calls.writes, race === 'pointer' ? [['set', '_coldpluginIndex', 'other']] : []);
+  });
+});
+
+test('round1 accountHint reflects only dosync avoid without altering candidate selection', async () => {
+  const f = fixture();
+  f.add('good', index([{ k: 'kept', s: '1' }]));
+  const ordinary = await core.diagnose(f.env);
+  f.local.set('dosync', 'avoid');
+  const hinted = await core.diagnose(f.env);
+  assert.equal(ordinary.accountHint, false);
+  assert.equal(hinted.accountHint, true);
+  assert.deepEqual(hinted, { ...ordinary, accountHint: true });
+  f.local.set('dosync', 'other');
+  assert.equal((await core.diagnose(f.env)).accountHint, false);
+  assert.deepEqual(f.calls.writes, []);
+});
+
 test('core bundles without CommonJS and still parses after full-line comments and newlines are removed', () => {
   assert.ok(fs.existsSync(corePath), 'contract core source must exist');
   const source = fs.readFileSync(corePath, 'utf8').split('\n').filter((line) => !line.includes('@strip-in-bundle'));
-  const body = source.filter((line) => !/^\s*\/\//.test(line)).join('');
-  const result = vm.runInNewContext(`(() => {${body}; return typeof RisuPluginStorageFix.diagnose;})()`);
-  assert.equal(result, 'function');
+  const body = source.filter((line) => !/^\s*\/\//.test(line)).join('\n');
+  for (const flattened of [body.replace(/\n/g, ''), body.replace(/\n/g, ' ')]) {
+    const result = vm.runInNewContext(`(() => {${flattened}; return typeof RisuPluginStorageFix.diagnose;})()`);
+    assert.equal(result, 'function');
+  }
 });
