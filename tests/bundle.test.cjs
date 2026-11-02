@@ -14,8 +14,10 @@ test('bookmarklet is a javascript: URL that survives losing every newline', () =
   const body = decodeURIComponent(url.slice('javascript:'.length));
   assert.ok(!/^\s*\/\//m.test(body), 'no full-line comments may remain');
   assert.ok(!body.includes('module.exports'), 'node export line must be stripped');
-  // Compile only (never executed): flattened to one line it must still parse.
+  // Compile only (never executed): flattened to one line it must still parse, whether a bookmark
+  // manager turns newlines into spaces or drops them entirely.
   assert.doesNotThrow(() => new Function(body.replace(/\n/g, ' ')));
+  assert.doesNotThrow(() => new Function(body.replace(/\n/g, '')));
 });
 
 test('loader bookmarklet is short and has nothing a URL layer could rewrite', () => {

@@ -11,6 +11,7 @@ npm run mutate
 node tests/live/drive.mjs healthy console
 node tests/live/drive.mjs account console
 node tests/live/drive.mjs reset bookmarklet
+node tests/live/drive.mjs reset-race bookmarklet
 node tests/live/drive.mjs recover bookmarklet
 node tests/live/drive.mjs opfs-db bookmarklet
 LOCAL_CONSOLE=1 node tests/live/drive.mjs reset loader

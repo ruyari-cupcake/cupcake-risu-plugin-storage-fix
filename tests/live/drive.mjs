@@ -3,7 +3,7 @@
 //   PLAYWRIGHT_MODULE=/path/to/node_modules/playwright STOCK_DIR=/path/to/risu/dist \
 //     node tests/live/drive.mjs <scenario> [form]
 //
-// scenario: venue (harness sanity, no tool) | healthy | reset | recover | opfs-db | account
+// scenario: venue (harness sanity, no tool) | healthy | reset | reset-race | recover | opfs-db | account
 // form:     bookmarklet (default) | console | loader   (loader + LOCAL_CONSOLE=1 serves the hosted
 //           console URL from this checkout, so it can run before a release)
 // BASE_URL=https://risuai.xyz/ runs against that origin instead of serving STOCK_DIR.
@@ -362,7 +362,11 @@ async function main() {
       gate((await pointer(page)) === before, 'ACCOUNT_POINTER_CHANGED');
       gate(!(await page.locator(`${PANEL} button.reset`).isVisible()), 'ACCOUNT_OFFERS_RESET');
       await page.evaluate(() => localStorage.removeItem('accountst'));
-    } else if (scenario === 'reset' || scenario === 'opfs-db') {
+    } else if (scenario === 'reset' || scenario === 'opfs-db' || scenario === 'reset-race') {
+      // reset-race: a plugin writes right after the pointer is cleared, so the store flushes a NEW
+      // index before the host saves; the tool must still confirm (a verified successor) and the
+      // raced value must survive the reload.
+      const race = scenario === 'reset-race';
       await seed(page, [['alpha', 1], ['beta', 'two']]);
       const location = await databaseLocation(page);
       step('host database location', location);
@@ -385,10 +389,19 @@ async function main() {
       gate(await page.locator(`${PANEL} button.do-reset`).isDisabled(), 'RESET_NOT_GUARDED_BY_CHECKBOX');
       await page.locator(`${PANEL} input.agree`).check();
       await page.locator(`${PANEL} button.do-reset`).click();
+      if (race) {
+        // Write only once the live pointer is gone (before that the store still rejects), and
+        // before the save receipt arrives (the host debounces its save by 500 ms).
+        await until('POINTER_NOT_CLEARED', async () => (await pointer(page)) !== dead, 20000);
+        const raced = await store(page, 'set', 'raced', 'during-confirmation');
+        gate(raced.ok, 'RACED_WRITE_FAILED', raced);
+        step('plugin wrote while the tool was confirming');
+      }
       const done = await panelStatus(page, /✅|⚠|❌/);
       gate(done.startsWith('✅'), 'RESET_NOT_CONFIRMED', { done });
       step('reset confirmed by tool', { text: done.split('\n')[0] });
-      gate((await pointer(page)) === null, 'POINTER_STILL_SET_IN_MEMORY');
+      const memoryPointer = await pointer(page);
+      gate(race ? memoryPointer !== dead : memoryPointer === null, 'POINTER_STILL_SET_IN_MEMORY', { memoryPointer });
       await reloadFromPanel(page);
       // The store may legitimately write a NEW index right away (it migrates legacy inline values
       // on its first load), so the check is: never the dead pointer again, and any pointer is readable.
@@ -401,6 +414,10 @@ async function main() {
       gate(inline.ok && inline.value === 'keep-me', 'OTHER_KEY_LOST', inline);
       const gone = await store(page, 'get', 'alpha');
       gate(gone.ok && gone.value === null, 'RESET_STORE_NOT_USABLE', gone);
+      if (race) {
+        const raced = await store(page, 'get', 'raced');
+        gate(raced.ok && raced.value === 'during-confirmation', 'RACED_VALUE_LOST', raced);
+      }
       const beforeWrite = Date.now();
       const write = await store(page, 'set', 'gamma', { after: 'reset' });
       gate(write.ok, 'WRITE_AFTER_RESET_FAILED', write);
