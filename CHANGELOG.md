@@ -7,7 +7,15 @@
 - Bookmarklet, short loader bookmarklet and console forms that run in a RisuAI web tab: diagnose the
   plugin storage index (`_coldpluginIndex` → OPFS `coldstorage_<id>.json`), offer the newest surviving
   index for recovery, or clear only the dangling pointer; refuse account / node / desktop storage.
+- Classifies the index file three ways: missing, unreadable (stock fails the same way) and uncertain
+  (locked / I/O / stricter decompression) — uncertain never allows a change. Unsupported browsers
+  (no OPFS, no DecompressionStream) and never-used plugin storage are reported, not touched.
 - Re-checks the pointer, the broken state and the chosen index right before changing anything, and
-  confirms the change on the saved `database/database.bin` before offering the reload.
-- Verified on stock RisuAI v2026.10.292 (IndexedDB and OPFS databases), on risuai.xyz, and with
-  CPM PROD 1.99.16 — evidence in `README.md`.
+  refuses (`NOT_SETTLED`, with a reload button) when the saved file does not match this tab.
+- ✅ only after a save written after the edit holds the target or a verified successor index that
+  equals the live pointer, and the live pointer has been still for 2 s (the store's first call after
+  a fix writes two indexes ~1 s apart; an immediate reload must not lose the second).
+- Account-storage traces (`dosync=avoid`) show a warning and preselect no recovery candidate.
+- Verified on stock RisuAI v2026.10.292 (IndexedDB and OPFS databases, including clock-shifted
+  "hours/days later" runs past stock's trash grace), on risuai.xyz, and with CPM PROD 1.99.16 —
+  evidence in `README.md`.

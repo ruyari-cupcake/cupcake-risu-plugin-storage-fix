@@ -23,8 +23,22 @@ Needs Playwright with Chromium: `PLAYWRIGHT_MODULE=/path/to/node_modules/playwri
    - `reset` — dead index, no survivor: reset → the panel's reload button → the dead pointer never
      returns, a legacy inline value survives, a new write persists across another reload.
    - `opfs-db` — the same with the host database in OPFS (`opfs_flag!`), asserting the location.
+   - `reset-race` — a plugin writes while the tool is confirming; the driver presses the panel's
+     reload IMMEDIATELY after ✅ (on purpose) and the raced value must still be there.
    - `recover` — the database points at a missing index while the newest index is still on disk:
      the newest is offered first, recovered, and its values read back after the reload.
+   - `recover-account-hint` — with `localStorage.dosync = 'avoid'` (account logout / declined sync):
+     the warning shows, nothing is preselected, an empty pick changes nothing, a deliberate pick recovers.
+   - `not-settled` — another tab announces itself on stock's `risu-db` channel, so this tab stops
+     saving and memory diverges from the saved file: the tool refuses (`NOT_SETTLED`), changes
+     nothing and offers the reload; after it the normal reset confirms.
+   - `aged-restore` / `aged-reset` — the host page's clock is moved ahead (init script, stock code
+     untouched) past stock's trash grace (old indexes 1 h, large values 24 h): stock itself deletes
+     the old index, an older database comes back (real dead state) → recover; or the cold files
+     are evicted days later → reset. Values must survive later +2 h and +27 h reloads, and running
+     the tool again says healthy.
+   - Every save wait checks that the saved `pluginStorage` block equals the live object (parsed per
+     stock `risuSave.ts`, no tool code); a profile holding both database files is refused.
    - `LOCAL_CONSOLE=1 … reset loader` serves the hosted `console.js` URL from this checkout;
      `BASE_URL=https://risuai.xyz/` runs on the official site instead of `STOCK_DIR` (its CSP has
      to allow the loader's script; it also asks "leave site?" on reload, which the driver accepts).
