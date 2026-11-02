@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>컵케익 리스 플러그인 저장소 고치기</title>
+<style>
+  :root { --bg: #fffaf3; --fg: #3b2a1f; --muted: #7a5f4b; --line: #e8cfb4; --accent: #c8763b; --code: #f5e3cf; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #1f1915; --fg: #f3e6d8; --muted: #c3a88f; --line: #4a3a2e; --accent: #e08a4a; --code: #2c241e; }
+  }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+    font: 15px/1.65 system-ui, -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  h2 { font-size: 17px; margin: 28px 0 8px; }
+  .muted { color: var(--muted); font-size: 13px; }
+  .bookmarklet { display: inline-block; padding: 10px 18px; border-radius: 12px; background: var(--accent);
+    color: #fff; text-decoration: none; font-weight: 600; cursor: grab; }
+  textarea { width: 100%; box-sizing: border-box; height: 96px; font: 12px/1.4 ui-monospace, monospace;
+    background: var(--code); color: var(--fg); border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
+  button { font: inherit; padding: 6px 14px; border-radius: 8px; border: 1px solid var(--line);
+    background: var(--code); color: var(--fg); cursor: pointer; }
+  ol, ul { padding-left: 20px; }
+  code { background: var(--code); padding: 1px 5px; border-radius: 4px; word-break: break-all; }
+  .box { border: 1px solid var(--line); border-radius: 12px; padding: 12px 16px; margin-top: 12px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>🧁 컵케익 리스 플러그인 저장소 고치기 <span class="muted">v__RPF_VERSION__</span></h1>
+  <p>리스(RisuAI)의 <b>플러그인 저장소 목차</b>가 사라지면, 리스는 데이터를 덮어쓰지 않으려고 모든 플러그인의 저장소 요청을
+    <code>Failed to load plugin storage index</code> 오류로 거부해요. 새로고침이나 플러그인 재설치로는 풀리지 않고, 리스에는 이걸 고치는 메뉴가 없어요.
+    이 도구는 <b>리스 탭 안에서</b> 그 상태를 확인하고 고쳐 줘요.</p>
+
+  <h2>이런 증상이면 써 보세요</h2>
+  <ul>
+    <li>CPM 패널에 🗄️ <b>"리스 플러그인 저장소가 열리지 않아요"</b> 안내가 떠요.</li>
+    <li>개발자 도구 콘솔에 <code>Failed to load plugin storage index</code>가 보여요.</li>
+    <li>플러그인 설정·기록이 새로고침할 때마다 저장되지 않거나 불러와지지 않아요.</li>
+  </ul>
+
+  <h2>하는 일</h2>
+  <ol>
+    <li>목차 파일이 정말 없는지(또는 손상됐는지) 브라우저 저장소에서 직접 확인해요. 정상이면 아무것도 바꾸지 않아요.</li>
+    <li><b>살아 있는 예전 목차</b>를 찾아요. 있으면 골라서 <b>되살리기</b> — 그 시점의 플러그인 데이터가 돌아와요.</li>
+    <li>없으면(또는 원하면) <b>초기화</b> — 없는 목차를 가리키는 표시 하나만 지우고, 플러그인들이 빈 저장소로 새로 시작해요.</li>
+    <li>리스가 그 변경을 <b>저장 파일에 실제로 기록했는지</b> 확인한 뒤에 새로고침 버튼을 보여 줘요.</li>
+  </ol>
+  <p class="muted">바꾸는 건 리스 데이터베이스 안의 표시(<code>_coldpluginIndex</code>) 하나뿐이에요. 캐릭터·채팅·설정, 플러그인 목록과 설정값,
+    플러그인의 로컬 저장소는 그대로예요. 아무것도 인터넷으로 보내지 않아요.
+    리스 플러그인 저장소는 플러그인끼리 나눠 쓰는 한 칸이라서, 특정 플러그인 몫만 골라 지울 수는 없어요.</p>
+
+  <h2>쓸 수 있는 곳</h2>
+  <ul>
+    <li>✅ 브라우저에서 쓰는 리스 — risuai.xyz(Risu 계정 저장을 쓰지 않을 때), 직접 올린 웹 빌드, 포크 리스</li>
+    <li>🚫 Risu 계정 저장 모드 — 서버가 잠깐 응답하지 않을 때도 같은 오류가 나서, 정말 고장인지 도구가 확인할 수 없어요. 확인만 하고 아무것도 바꾸지 않아요.</li>
+    <li>🚫 자체 서버(노드) 리스, 데스크톱 앱 — 저장소가 서버/앱 안에 있어서 지원하지 않아요.</li>
+  </ul>
+  <p class="muted">최근에 Risu 계정 로그아웃이나 "계정에 저장" 끄기를 한 뒤 이 증상이 생겼다면, 목차가 계정 쪽에 남아 있을 수도 있어요(도구로는 확인할 수 없어요).
+    초기화하기 전에 그쪽부터 확인해 보세요. 실행할 때는 다른 리스 탭을 닫아 주세요.</p>
+
+  <h2>1. PC — 북마클릿</h2>
+  <ol>
+    <li>북마크바를 켜고(<code>Ctrl+Shift+B</code>) 아래 버튼을 북마크바로 끌어다 놓아요.</li>
+    <li>리스 화면이 다 뜬 탭에서 그 북마크를 눌러요. 오른쪽 위에 패널이 뜨고 바로 상태를 확인해요.</li>
+    <li>안내에 따라 <b>되살리기</b> 또는 <b>초기화</b> → <b>지금 새로고침</b>.</li>
+  </ol>
+  <p><a class="bookmarklet" href="__RPF_BOOKMARKLET__">🧁 플러그인 저장소 고치기</a></p>
+
+  <h2>2. 모바일 — 짧은 로더 북마클릿</h2>
+  <p>폰에서는 긴 코드가 붙여넣는 중에 잘릴 수 있어서 <b>짧은 로더</b>를 써요. 로더는 실행할 때 이 사이트에서 최신 도구를 불러와요(인터넷 연결 필요, PC에서도 똑같이 동작해요).</p>
+  <ol>
+    <li>아래 <b>코드 복사</b>를 눌러요.</li>
+    <li>아무 페이지나 북마크로 저장한 뒤, 북마크 수정에서 이름을 <code>저장소고치기</code>로, 주소(URL)를 복사한 코드로 바꿔요.</li>
+    <li>리스 탭의 주소창에 <code>저장소고치기</code>를 입력하고, 목록에 뜬 북마크(별 모양)를 눌러요.</li>
+  </ol>
+  <div class="box">
+    <textarea id="code" readonly>__RPF_LOADER__</textarea>
+    <p><button type="button" id="copy">코드 복사</button> <span id="copied" class="muted"></span></p>
+  </div>
+  <p class="muted">인터넷 없이 동작하는 긴 버전이 필요하면 <a href="bookmarklet.txt">bookmarklet.txt</a>(약 __RPF_BOOKMARKLET_KB__ KB)를 쓰면 돼요.</p>
+
+  <h2>3. 개발자 도구 콘솔</h2>
+  <p>리스 탭에서 F12 → Console에 <a href="console.js">console.js</a> 내용을 붙여넣고 Enter.
+    크롬이 처음 붙여넣기를 막으면 안내대로 <code>allow pasting</code>을 입력한 뒤 다시 붙여넣어요.</p>
+
+  <p class="muted">소스 코드·검증 기록: <a href="__RPF_REPO_URL__">__RPF_REPO_URL__</a> · MIT License · Ruyari Cupcake</p>
+</main>
+<script>
+  document.getElementById('copy').addEventListener('click', async () => {
+    const code = document.getElementById('code');
+    try {
+      await navigator.clipboard.writeText(code.value);
+    } catch {
+      code.select();
+      document.execCommand('copy');
+    }
+    document.getElementById('copied').textContent = '복사했어요!';
+  });
+</script>
+</body>
+</html>

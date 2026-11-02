@@ -1,0 +1,1 @@
+javascript:void(document.head.appendChild(Object.assign(document.createElement('script'),{src:'https://ruyari-cupcake.github.io/cupcake-risu-plugin-storage-fix/dist/console.js',onerror:function(){alert('Cupcake-plugin-storage-fix:load-failed(network?)')}})))
