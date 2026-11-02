@@ -30,6 +30,8 @@ const INDEX_ERROR = 'Failed to load plugin storage index';
 const BOOT_TIMEOUT_MS = 150000;
 const STEP_TIMEOUT_MS = 60000;
 const FLUSH_SETTLE_MS = 2500;
+// risuai.xyz (BASE_URL) can take well over 20 s to reload its bundle.
+const NAVIGATION_TIMEOUT_MS = 120000;
 
 const [scenario = 'reset', form = 'bookmarklet'] = process.argv.slice(2);
 const record = { scenario, form, base: null, steps: [], ok: false };
@@ -212,6 +214,28 @@ async function newestDbBackup(page) {
   });
 }
 
+// Where the host keeps database/database.bin: OPFS (hex-named root file) or IndexedDB `risuai`.
+async function databaseLocation(page) {
+  return page.evaluate(async () => {
+    const hex = Array.from(new TextEncoder().encode('database/database.bin'), (b) => b.toString(16).padStart(2, '0')).join('');
+    const dir = await navigator.storage.getDirectory();
+    let opfs = false;
+    try { await dir.getFileHandle(hex); opfs = true; } catch (error) {}
+    const idb = await new Promise((resolve) => {
+      const open = indexedDB.open('risuai');
+      open.onsuccess = () => {
+        const db = open.result;
+        if (!db.objectStoreNames.contains('keyvaluepairs')) { db.close(); resolve(false); return; }
+        const request = db.transaction('keyvaluepairs').objectStore('keyvaluepairs').getKey('database/database.bin');
+        request.onsuccess = () => { db.close(); resolve(request.result !== undefined); };
+        request.onerror = () => { db.close(); resolve(false); };
+      };
+      open.onerror = () => resolve(false);
+    });
+    return { opfs, idb };
+  });
+}
+
 async function waitHostSaved(page, since) {
   await until('HOST_SAVE_TIMEOUT', async () => (await newestDbBackup(page)) > since + 600);
   await sleep(1000);
@@ -240,7 +264,7 @@ async function panelStatus(page, pattern) {
 }
 
 async function reloadFromPanel(page) {
-  const navigation = page.waitForNavigation({ timeout: 60000 });
+  const navigation = page.waitForNavigation({ timeout: NAVIGATION_TIMEOUT_MS });
   await page.locator(`${PANEL} button.reload`).click();
   await navigation;
   await boot(page, null);
@@ -253,7 +277,7 @@ async function installProbeIfMissing(page) {
 }
 
 async function reload(page) {
-  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.reload({ waitUntil: 'domcontentloaded', timeout: NAVIGATION_TIMEOUT_MS });
   await boot(page, null);
 }
 
@@ -296,7 +320,12 @@ async function main() {
     }
     const page = context.pages()[0] || await context.newPage();
     page.setDefaultTimeout(20000);
-    page.on('dialog', (dialog) => { (record.dialogs ||= []).push(dialog.message().slice(0, 200)); dialog.dismiss().catch(() => {}); });
+    // risuai.xyz asks "leave site?" on every navigation (stock preload.ts, isWeb); a user answers it
+    // by confirming the reload, so the driver accepts exactly that kind and dismisses the rest.
+    page.on('dialog', (dialog) => {
+      (record.dialogs ||= []).push({ type: dialog.type(), message: dialog.message().slice(0, 200) });
+      (dialog.type() === 'beforeunload' ? dialog.accept() : dialog.dismiss()).catch(() => {});
+    });
     page.on('pageerror', (error) => { (record.pageErrors ||= []).push(String(error?.message || error).slice(0, 200)); });
 
     await boot(page, base);
@@ -335,6 +364,10 @@ async function main() {
       await page.evaluate(() => localStorage.removeItem('accountst'));
     } else if (scenario === 'reset' || scenario === 'opfs-db') {
       await seed(page, [['alpha', 1], ['beta', 'two']]);
+      const location = await databaseLocation(page);
+      step('host database location', location);
+      gate(location.opfs !== location.idb, 'DATABASE_LOCATION_AMBIGUOUS', location);
+      gate(location.opfs === (scenario === 'opfs-db'), 'DATABASE_LOCATION_NOT_EXERCISED', location);
       await page.evaluate(() => { window.__pluginApis__.getDatabase().pluginCustomStorage.rpfLegacyInline = 'keep-me'; });
       const since = Date.now();
       await waitHostSaved(page, since);
@@ -357,15 +390,22 @@ async function main() {
       step('reset confirmed by tool', { text: done.split('\n')[0] });
       gate((await pointer(page)) === null, 'POINTER_STILL_SET_IN_MEMORY');
       await reloadFromPanel(page);
-      gate((await pointer(page)) === null, 'POINTER_CAME_BACK_AFTER_RELOAD');
+      // The store may legitimately write a NEW index right away (it migrates legacy inline values
+      // on its first load), so the check is: never the dead pointer again, and any pointer is readable.
+      const after = await pointer(page);
+      const coldAfter = await coldFiles(page, 'list');
+      step('pointer after reload', { after, dead, newIndexFile: after ? coldAfter.includes(`coldstorage_${after}.json`) : null });
+      gate(after !== dead, 'DEAD_POINTER_CAME_BACK_AFTER_RELOAD', { after });
+      gate(after === null || coldAfter.includes(`coldstorage_${after}.json`), 'NEW_POINTER_HAS_NO_FILE', { after });
       const inline = await store(page, 'get', 'rpfLegacyInline');
       gate(inline.ok && inline.value === 'keep-me', 'OTHER_KEY_LOST', inline);
       const gone = await store(page, 'get', 'alpha');
       gate(gone.ok && gone.value === null, 'RESET_STORE_NOT_USABLE', gone);
+      const beforeWrite = Date.now();
       const write = await store(page, 'set', 'gamma', { after: 'reset' });
       gate(write.ok, 'WRITE_AFTER_RESET_FAILED', write);
       await sleep(FLUSH_SETTLE_MS);
-      await waitHostSaved(page, Date.now());
+      await waitHostSaved(page, beforeWrite);
       await reload(page);
       const reread = await store(page, 'get', 'gamma');
       gate(reread.ok && reread.value?.after === 'reset', 'WRITE_AFTER_RESET_NOT_PERSISTED', reread);

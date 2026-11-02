@@ -716,9 +716,10 @@ function openFixPanel() {
       }
       if (run.signal.aborted) return;
       detail.textContent = '';
-      setStatus(action === 'recover'
+      const reloadHint = '\n브라우저가 "사이트에서 나가시겠습니까?"라고 물으면 새로고침(나가기)을 눌러 주세요. 저장은 이미 끝났어요.';
+      setStatus((action === 'recover'
         ? '✅ 예전 목차로 되돌리고, 리스 저장 파일에 반영된 것까지 확인했어요.\n"지금 새로고침"을 누르면 플러그인들이 되살린 데이터로 다시 시작해요.'
-        : '✅ 없는 목차 표시를 지우고, 리스 저장 파일에 반영된 것까지 확인했어요.\n"지금 새로고침"을 누르면 플러그인들이 빈 저장소로 다시 시작해요.', 'ok');
+        : '✅ 없는 목차 표시를 지우고, 리스 저장 파일에 반영된 것까지 확인했어요.\n"지금 새로고침"을 누르면 플러그인들이 빈 저장소로 다시 시작해요.') + reloadHint, 'ok');
       showButtons([reloadButton]);
     } catch (error) {
       if (run.signal.aborted) return;
