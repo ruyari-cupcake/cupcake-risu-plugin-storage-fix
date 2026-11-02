@@ -66,12 +66,12 @@ const RPF_BROWSER_TEXT = {
     '이 주소에서는 도구가 브라우저 저장소(OPFS)를 읽을 수 없어요. 보통 http:// 로 연 사설 주소에서 이래요.',
     'https:// 주소나 localhost로 연 리스에서 다시 실행해 주세요. 아무것도 바꾸지 않았어요.',
   ].join('\n'),
-  decompression: '이 브라우저는 도구에 필요한 기능(압축 풀기)을 지원하지 않아요. 최신 크롬·엣지·파이어폭스에서 실행해 주세요. 아무것도 바꾸지 않았어요.',
+  decompression: '이 브라우저는 도구에 필요한 기능(압축 풀기)을 지원하지 않아요. 최신 크롬·엣지·파이어폭스·사파리에서 실행해 주세요. 아무것도 바꾸지 않았어요.',
 };
 
 const RPF_ACCOUNT_HINT = '이 브라우저에서 Risu 계정 저장을 쓰다가 로그아웃했거나 동기화를 끈 흔적이 있어요. '
   + '그렇다면 최신 플러그인 데이터는 계정 쪽에 남아 있을 수 있어요 (이 도구는 계정 쪽을 확인할 수 없어요). '
-  + '되살리기나 초기화를 하기 전에, 설정의 Risu 계정에서 다시 로그인해 계정 데이터를 불러오는 것부터 해 보세요.';
+  + '이 도구로 무언가를 바꾸기 전에, 설정의 Risu 계정에서 다시 로그인해 계정 데이터를 불러오는 것부터 해 보세요.';
 
 function rpfFormatTime(ms) {
   try {
@@ -240,7 +240,8 @@ function openFixPanel() {
       items.push('지워지는 건 없어진 목차를 가리키는 표시 하나뿐이에요. 그 목차에 있던 값들은 이미 이 기기에서 읽을 수 없는 상태예요.');
     }
     items.push('리스 플러그인 저장소는 플러그인끼리 나눠 쓰는 한 칸이라, 한 플러그인 몫만 골라 지울 수는 없어요. '
-      + '플러그인이 이 저장소에 넣어 두던 데이터(예: CPM 사용량 기록)는 새로 시작해요. 옛 방식으로 따로 남아 있던 값은 다시 들어와요.');
+      + '플러그인이 이 저장소에 넣어 두던 데이터(예: CPM 사용량 기록)는 새로 시작해요. '
+      + '예전 리스 버전 방식으로 목차 밖에 따로 저장돼 있던 값이 있다면, 그 값은 그대로 다시 들어와요.');
     items.push('그대로 남는 것: 캐릭터·채팅·설정, 리스에 설치된 플러그인과 그 설정값, 플러그인의 로컬 저장소(safeLocalStorage·IndexedDB).');
     items.push(diagnosis && diagnosis.accountHint
       ? RPF_ACCOUNT_HINT
@@ -358,7 +359,9 @@ function openFixPanel() {
       }
       if (run.signal.aborted) return;
       detail.textContent = '';
-      const reloadHint = '\n브라우저가 "사이트에서 나가시겠습니까?"라고 물으면 새로고침(나가기)을 눌러 주세요. 저장은 이미 끝났어요.';
+      const reloadHint = '\n이 도구가 바꾼 표시는 저장까지 끝났어요. 방금 플러그인을 쓰던 중이었다면 몇 초 뒤에 새로고침해 주세요 '
+        + '(플러그인이 따로 저장 중인 값까지는 이 도구가 확인할 수 없어요).'
+        + '\n브라우저가 "사이트에서 나가시겠습니까?"라고 물으면 새로고침(나가기)을 눌러 주세요.';
       setStatus((action === 'recover'
         ? '✅ 고른 시점의 목차로 되돌리고, 리스 저장 파일에 반영된 것까지 확인했어요.\n"지금 새로고침"을 누르면 플러그인들이 되살린 데이터로 다시 시작해요.'
         : '✅ 없는 목차 표시를 지우고, 리스 저장 파일에 반영된 것까지 확인했어요.\n"지금 새로고침"을 누르면 플러그인 저장소가 새로 시작해요.') + reloadHint, 'ok');
@@ -367,6 +370,11 @@ function openFixPanel() {
       if (run.signal.aborted) return;
       if (error instanceof RisuPluginStorageFix.FixError && error.code === 'SAVE_UNCONFIRMED') {
         setStatus(`⚠ ${error.message}\n30초쯤 더 기다렸다가 새로고침한 뒤, 이 도구를 다시 실행해서 "정상"으로 나오는지 확인해 주세요. 그래도 고장으로 나오면 한 번 더 고치면 돼요.`, 'error');
+        showButtons([reloadButton, rerunButton]);
+        return;
+      }
+      if (error instanceof RisuPluginStorageFix.FixError && (error.code === 'NOT_SETTLED' || error.code === 'UNCERTAIN')) {
+        setStatus(`⚠ ${error.message}\n"지금 새로고침"을 누른 뒤 이 도구를 다시 실행해 주세요. "다시 확인"만 누르면 같은 상태로 다시 확인하게 돼요.`, 'error');
         showButtons([reloadButton, rerunButton]);
         return;
       }

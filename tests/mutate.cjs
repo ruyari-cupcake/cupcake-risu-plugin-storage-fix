@@ -62,6 +62,8 @@ const MUTANTS = [
   ['treat undefined unequal to null', 'const currentPointer = liveStorage(env)?.[POINTER_KEY] ?? null;', 'const currentPointer = liveStorage(env)?.[POINTER_KEY];'],
   ['settle from wait start instead of last change', 'lastChangeAt = env.now();', 'lastChangeAt = started;'],
   ['IDB drop matched read before settle', 'const shouldRead = lastBackup > baseline', "saved = { format: 'unknown' }; const shouldRead = lastBackup > baseline"],
+  ['read after settle without a newer backup', "const shouldRead = lastBackup > baseline && (location.kind === 'opfs' || newer || unknownRetries > 0);",
+    "const shouldRead = env.now() - lastChangeAt >= SAVE_SETTLE_MS || (lastBackup > baseline && (location.kind === 'opfs' || newer || unknownRetries > 0));"],
   ['keep stale IDB receipt after newer unknown read', '        saved = await readAtLocation(env, location);', "const nextSaved = await readAtLocation(env, location); if (nextSaved.format !== 'unknown') saved = nextSaved;"],
   ['sample live pointer before awaited verification',
     "const accepted = saved.format === 'risusave' && saved.hasBlock && await predicate(saved.pointer);\n      throwIfCancelled(signal);\n      requireWeb(env);\n      // Sample after all awaited reads/verification: a plugin can flush during either one.\n      // Deleting the live key gives undefined, while the persisted parser reports null.\n      const currentPointer = liveStorage(env)?.[POINTER_KEY] ?? null;",

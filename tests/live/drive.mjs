@@ -4,7 +4,7 @@
 //     node tests/live/drive.mjs <scenario> [form]
 //
 // scenario: venue (harness sanity, no tool) | healthy | reset | reset-race | recover | recover-account-hint
-//           | opfs-db | account | aged-restore | aged-reset (aged = host clock moved past stock trash grace)
+//           | not-settled | opfs-db | account | aged-restore | aged-reset (aged = host clock moved past stock trash grace)
 // form:     bookmarklet (default) | console | loader   (loader + LOCAL_CONSOLE=1 serves the hosted
 //           console URL from this checkout, so it can run before a release)
 // BASE_URL=https://risuai.xyz/ runs against that origin instead of serving STOCK_DIR.
@@ -189,41 +189,46 @@ async function coldFiles(page, action) {
   }, action);
 }
 
-// The live pluginCustomStorage next to the pluginStorage block of the saved database/database.bin
-// (OPFS hex-named file when present, else IndexedDB `risuai`). The parser follows stock
-// ts/storage/risuSave.ts directly (header "RISUSAVE\0"; block = type, compression flag, name
-// length, name, uint32 length, data; PLUGIN_STORAGE = 11) and deliberately shares no code with
-// the tool, so the harness never checks the tool with the tool's own reader.
+// The live pluginCustomStorage next to the pluginStorage block of the saved database/database.bin.
+// The parser follows stock ts/storage/risuSave.ts directly (header "RISUSAVE\0"; block = type,
+// compression flag, name length, name, uint32 length, data; PLUGIN_STORAGE = 11) and deliberately
+// shares no code with the tool, so the harness never checks the tool with the tool's own reader.
+// Exactly one database file may exist (OPFS hex-named file or IndexedDB `risuai`): with both,
+// which one stock reads depends on flags and migration state, so the oracle refuses to guess.
+// Live is sampled after every await, so a value that moved during parsing never compares equal.
 async function savedVsLive(page) {
   return page.evaluate(async () => {
     const key = 'database/database.bin';
     const hex = Array.from(new TextEncoder().encode(key), (b) => b.toString(16).padStart(2, '0')).join('');
-    let bytes = null;
+    let opfsBytes = null;
     try {
       const file = await (await (await navigator.storage.getDirectory()).getFileHandle(hex)).getFile();
-      bytes = new Uint8Array(await file.arrayBuffer());
-    } catch (error) {
-      bytes = await new Promise((resolve) => {
-        const open = indexedDB.open('risuai');
-        open.onsuccess = () => {
-          const db = open.result;
-          if (!db.objectStoreNames.contains('keyvaluepairs')) { db.close(); resolve(null); return; }
-          const request = db.transaction('keyvaluepairs').objectStore('keyvaluepairs').get(key);
-          request.onsuccess = () => {
-            db.close();
-            const value = request.result;
-            resolve(value ? new Uint8Array(value instanceof ArrayBuffer ? value : value.buffer || value) : null);
-          };
-          request.onerror = () => { db.close(); resolve(null); };
+      opfsBytes = new Uint8Array(await file.arrayBuffer());
+    } catch (error) {}
+    // Opening a missing database would create it; only an existing `risuai` database is read.
+    const idbExists = (await indexedDB.databases()).some((db) => db.name === 'risuai');
+    const idbBytes = !idbExists ? null : await new Promise((resolve) => {
+      const open = indexedDB.open('risuai');
+      open.onsuccess = () => {
+        const db = open.result;
+        if (!db.objectStoreNames.contains('keyvaluepairs')) { db.close(); resolve(null); return; }
+        const request = db.transaction('keyvaluepairs').objectStore('keyvaluepairs').get(key);
+        request.onsuccess = () => {
+          db.close();
+          const value = request.result;
+          resolve(value ? new Uint8Array(value instanceof ArrayBuffer ? value : value.buffer || value) : null);
         };
-        open.onerror = () => resolve(null);
-      });
-    }
+        request.onerror = () => { db.close(); resolve(null); };
+      };
+      open.onerror = () => resolve(null);
+    });
     const canonical = (value) => JSON.stringify(value, (k, v) => (v && typeof v === 'object' && !Array.isArray(v)
       ? Object.fromEntries(Object.keys(v).sort().map((name) => [name, v[name]])) : v));
-    const live = canonical(window.__pluginApis__.getDatabase().pluginCustomStorage ?? null);
+    const liveNow = () => canonical(window.__pluginApis__.getDatabase().pluginCustomStorage ?? null);
+    if (opfsBytes && idbBytes) return { live: liveNow(), saved: null, ambiguous: true };
+    const bytes = opfsBytes || idbBytes;
     const header = 'RISUSAVE\0';
-    if (!bytes || new TextDecoder().decode(bytes.subarray(0, header.length)) !== header) return { live, saved: null };
+    if (!bytes || new TextDecoder().decode(bytes.subarray(0, header.length)) !== header) return { live: liveNow(), saved: null };
     let offset = header.length;
     let saved = null;
     while (offset + 7 <= bytes.length) {
@@ -238,7 +243,7 @@ async function savedVsLive(page) {
       if (compressed) data = new Uint8Array(await new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer());
       saved = canonical(JSON.parse(new TextDecoder().decode(data)));
     }
-    return { live, saved };
+    return { live: liveNow(), saved };
   });
 }
 
@@ -249,7 +254,8 @@ async function databaseLocation(page) {
     const dir = await navigator.storage.getDirectory();
     let opfs = false;
     try { await dir.getFileHandle(hex); opfs = true; } catch (error) {}
-    const idb = await new Promise((resolve) => {
+    const idbExists = (await indexedDB.databases()).some((db) => db.name === 'risuai');
+    const idb = !idbExists ? false : await new Promise((resolve) => {
       const open = indexedDB.open('risuai');
       open.onsuccess = () => {
         const db = open.result;
@@ -563,6 +569,52 @@ async function main() {
       gate((await pointer(page)) === newest, 'RECOVERED_POINTER_LOST_AFTER_RELOAD');
       await expectValues(page, { alpha: 2, beta: 'latest' }, null);
       step('deliberately picked index recovered and readable after reload');
+    } else if (scenario === 'not-settled') {
+      // Another Risu tab announces itself on stock's `risu-db` channel, so this tab stops saving
+      // (globalApi.svelte.ts L296-312, L438-442). Memory then moves to a different missing index
+      // that never reaches the disk: the tool must refuse (NOT_SETTLED), change nothing, and offer
+      // the reload its message asks for; after that reload the normal repair works.
+      await seed(page, [['alpha', 1]]);
+      await waitHostSaved(page);
+      const dead = await pointer(page);
+      await coldFiles(page, 'delete');
+      await reload(page);
+      await expectDead(page);
+      await page.evaluate(() => new BroadcastChannel('risu-db').postMessage('rpf-other-tab'));
+      await sleep(1500);
+      const diverged = await page.evaluate(() => {
+        const id = crypto.randomUUID();
+        window.__pluginApis__.getDatabase().pluginCustomStorage._coldpluginIndex = id;
+        return id;
+      });
+      await sleep(3000);
+      const saved = await savedVsLive(page);
+      gate(saved.saved !== saved.live, 'HOST_STILL_SAVING_DESPITE_OTHER_TAB', saved);
+      step('another tab took over saving; memory diverged from the saved file', { dead, diverged });
+      await runTool(page);
+      await panelStatus(page, /목차 파일이 이 브라우저에 없어요/);
+      await page.locator(`${PANEL} button.reset`).click();
+      await page.locator(`${PANEL} input.agree`).check();
+      await page.locator(`${PANEL} button.do-reset`).click();
+      const refused = await panelStatus(page, /⚠|✅|❌ (?!플러그인 저장소 목차)/);
+      gate(refused.startsWith('⚠') && refused.includes('일치하지 않아'), 'NOT_SETTLED_NOT_SHOWN', { refused });
+      gate(await page.locator(`${PANEL} button.reload`).isVisible(), 'NOT_SETTLED_HIDES_RELOAD');
+      gate(await page.locator(`${PANEL} button.rerun`).isVisible(), 'NOT_SETTLED_HIDES_RERUN');
+      gate((await pointer(page)) === diverged, 'NOT_SETTLED_CHANGED_POINTER');
+      step('tool refused with NOT_SETTLED, changed nothing, offers reload', { text: refused.split('\n')[0] });
+      await reloadFromPanel(page);
+      gate((await pointer(page)) === dead, 'UNSAVED_DIVERGENCE_PERSISTED', { now: await pointer(page) });
+      await expectDead(page);
+      await runTool(page);
+      await panelStatus(page, /목차 파일이 이 브라우저에 없어요/);
+      await page.locator(`${PANEL} button.reset`).click();
+      await page.locator(`${PANEL} input.agree`).check();
+      await page.locator(`${PANEL} button.do-reset`).click();
+      const done = await panelStatus(page, /✅|⚠|❌ (?!플러그인 저장소 목차)/);
+      gate(done.startsWith('✅'), 'RESET_NOT_CONFIRMED', { done });
+      await reloadFromPanel(page);
+      await expectValues(page, { alpha: null }, dead);
+      step('after the reload the normal reset confirms and the store works');
     } else if (scenario === 'aged-restore') {
       // The natural dead state: an older database (pointing at index A) comes back after stock has
       // already deleted A once its trash grace passed. Nothing is deleted by hand here.

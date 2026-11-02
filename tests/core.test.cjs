@@ -480,6 +480,21 @@ test('wait gate reads only after a strictly newer numeric backup, never trusting
   }
 });
 
+test('round2 matching disk and live state never confirm without a post-baseline backup, even long after the settle', async (t) => {
+  // Round-2 review (Astra#3): the settle must never stand in for the backup gate. Disk already
+  // matches live and nothing new is saved, so no read may happen and the wait must time out.
+  for (const location of ['idb', 'opfs']) await t.test(location, async () => {
+    const f = fixture({ location, storage: { _coldpluginIndex: 'good' } });
+    f.persist({ number: 100, from: { _coldpluginIndex: 'good' } });
+    const reads = () => (location === 'idb' ? f.calls.get.filter((key) => key === DB).length : f.calls.files.filter((key) => key === hex(DB)).length);
+    const before = reads();
+    const started = f.env.now();
+    await assert.rejects(core.waitForPersisted(f.env, (pointer) => pointer === 'good', { timeoutMs: 6000 }), { code: 'SAVE_UNCONFIRMED' });
+    assert.ok(f.env.now() - started >= 6000, 'the wait ran well past the settle window');
+    assert.equal(reads(), before, 'no database read without a strictly newer backup');
+  });
+});
+
 test('wait timeouts and cancellation are typed, including after an awaited read and after mutation', async () => {
   const wait = api('waitForPersisted');
   const f = fixture();
