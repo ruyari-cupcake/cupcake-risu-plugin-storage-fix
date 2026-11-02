@@ -12,6 +12,13 @@ const RisuPluginStorageFix = (() => {
   // was already running when the pointer changed has to finish first; a timeout only reports.
   const DEFAULT_SAVE_TIMEOUT_MS = 60000;
   const SAVE_POLL_INTERVAL_MS = 500;
+  // Stock ea61945: pluginStorageStore.ts L56, L502-519 delays a call's own write after
+  // the migration flush (L213-221); globalApi.svelte.ts L412-416 idles before saving.
+  // Allow that base flush, the host idle, and a poll before offering immediate reload.
+  // Size-dependent flush delays (up to 15 s, stock L57/L505) are not modeled here.
+  const STOCK_PLUGIN_FLUSH_DELAY_MS = 1000;
+  const STOCK_SAVE_IDLE_MS = 500;
+  const SAVE_SETTLE_MS = STOCK_PLUGIN_FLUSH_DELAY_MS + STOCK_SAVE_IDLE_MS + SAVE_POLL_INTERVAL_MS;
   const SAVE_UNKNOWN_RETRY_COUNT = 3;
   const DATABASE_KEY = 'database/database.bin';
   const DATABASE_NAME = 'risuai';
@@ -345,17 +352,19 @@ const RisuPluginStorageFix = (() => {
     // The candidate read yields: a concurrent plugin write or backend switch must still win.
     const { location, baseline } = await prepareEdit(env, pointer, signal);
     const storage = checkLive(env, pointer, signal);
+    const editedAt = env.now();
     storage[POINTER_KEY] = candidateId;
     return await waitForPersisted(env, (saved) => acceptsPersistedPointer(env, root, saved, candidateId, pointer, signal),
-      { signal, timeoutMs, location, baseline });
+      { signal, timeoutMs, location, baseline, editedAt });
   }
 
   async function reset(env, { pointer, signal, timeoutMs } = {}) {
     const { root, location, baseline } = await prepareEdit(env, pointer, signal);
     const storage = checkLive(env, pointer, signal);
+    const editedAt = env.now();
     delete storage[POINTER_KEY];
     return await waitForPersisted(env, (saved) => acceptsPersistedPointer(env, root, saved, null, pointer, signal),
-      { signal, timeoutMs, location, baseline });
+      { signal, timeoutMs, location, baseline, editedAt });
   }
 
   function toHex(text) {
@@ -460,15 +469,19 @@ const RisuPluginStorageFix = (() => {
 
   // This is a receipt wait only: it never forces a save, rolls back a live edit, or retries it.
   // A new backup opens the gate, but OPFS close() may still be in flight. IDB is transactional;
-  // only unknown reads there get a small retry budget before waiting for the next backup.
-  async function waitForPersisted(env, predicate, { signal, timeoutMs = DEFAULT_SAVE_TIMEOUT_MS, location, baseline } = {}) {
+  // retain its gated snapshot while the live pointer settles, replacing it on every new read
+  // (even an unknown read). Only unknown IDB reads get a bounded retry budget.
+  async function waitForPersisted(env, predicate, { signal, timeoutMs = DEFAULT_SAVE_TIMEOUT_MS, location, baseline, editedAt } = {}) {
     throwIfCancelled(signal);
     requireWeb(env);
     const started = env.now();
+    let livePointer = liveStorage(env)?.[POINTER_KEY] ?? null;
+    let lastChangeAt = editedAt ?? started;
     location = location || await databaseLocation(env);
     if (baseline === undefined) baseline = await latestBackup(env, location, signal);
     let lastBackup = baseline;
     let unknownRetries = 0;
+    let saved = { format: 'unknown' };
     while (true) {
       throwIfCancelled(signal);
       requireWeb(env);
@@ -479,16 +492,24 @@ const RisuPluginStorageFix = (() => {
       const shouldRead = lastBackup > baseline && (location.kind === 'opfs' || newer || unknownRetries > 0);
       if (shouldRead) {
         if (!newer) unknownRetries -= 1;
-        const saved = await readAtLocation(env, location);
+        saved = await readAtLocation(env, location);
         throwIfCancelled(signal);
         requireWeb(env);
         if (saved.format !== 'unknown') unknownRetries = 0;
-        // A save without the block says nothing about the pointer, so it cannot confirm a reset.
-        if (saved.format === 'risusave' && saved.hasBlock && await predicate(saved.pointer)) {
-          throwIfCancelled(signal);
-          requireWeb(env);
-          return { confirmed: true, persistedPointer: saved.pointer };
-        }
+      }
+      // A save without the block says nothing about the pointer, so it cannot confirm a reset.
+      const accepted = saved.format === 'risusave' && saved.hasBlock && await predicate(saved.pointer);
+      throwIfCancelled(signal);
+      requireWeb(env);
+      // Sample after all awaited reads/verification: a plugin can flush during either one.
+      // Deleting the live key gives undefined, while the persisted parser reports null.
+      const currentPointer = liveStorage(env)?.[POINTER_KEY] ?? null;
+      if (currentPointer !== livePointer) {
+        livePointer = currentPointer;
+        lastChangeAt = env.now();
+      }
+      if (accepted && saved.pointer === livePointer && env.now() - lastChangeAt >= SAVE_SETTLE_MS) {
+        return { confirmed: true, persistedPointer: saved.pointer };
       }
       const remaining = timeoutMs - (env.now() - started);
       if (remaining <= 0) throw new FixError('SAVE_UNCONFIRMED');

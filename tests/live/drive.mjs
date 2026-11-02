@@ -182,35 +182,56 @@ async function coldFiles(page, action) {
   }, action);
 }
 
-// Newest database/dbbackup-<n>.bin the host wrote (IndexedDB or OPFS database), in ms.
-async function newestDbBackup(page) {
+// The live pluginCustomStorage next to the pluginStorage block of the saved database/database.bin
+// (OPFS hex-named file when present, else IndexedDB `risuai`). The parser follows stock
+// ts/storage/risuSave.ts directly (header "RISUSAVE\0"; block = type, compression flag, name
+// length, name, uint32 length, data; PLUGIN_STORAGE = 11) and deliberately shares no code with
+// the tool, so the harness never checks the tool with the tool's own reader.
+async function savedVsLive(page) {
   return page.evaluate(async () => {
-    const stamps = [];
-    const collect = (key) => {
-      const match = /^database\/dbbackup-(\d+)\.bin$/.exec(key);
-      if (match) stamps.push(Number(match[1]) * 100);
-    };
-    const dir = await navigator.storage.getDirectory();
-    for await (const [name] of dir.entries()) {
-      if (/^[0-9a-f]+$/.test(name) && name.length % 2 === 0) {
-        collect(new TextDecoder().decode(new Uint8Array(name.match(/../g).map((h) => parseInt(h, 16)))));
-      }
-    }
-    const dbs = indexedDB.databases ? await indexedDB.databases() : [];
-    if (dbs.some((db) => db.name === 'risuai')) {
-      await new Promise((resolve) => {
+    const key = 'database/database.bin';
+    const hex = Array.from(new TextEncoder().encode(key), (b) => b.toString(16).padStart(2, '0')).join('');
+    let bytes = null;
+    try {
+      const file = await (await (await navigator.storage.getDirectory()).getFileHandle(hex)).getFile();
+      bytes = new Uint8Array(await file.arrayBuffer());
+    } catch (error) {
+      bytes = await new Promise((resolve) => {
         const open = indexedDB.open('risuai');
         open.onsuccess = () => {
           const db = open.result;
-          if (!db.objectStoreNames.contains('keyvaluepairs')) { db.close(); resolve(); return; }
-          const request = db.transaction('keyvaluepairs').objectStore('keyvaluepairs').getAllKeys();
-          request.onsuccess = () => { request.result.forEach((key) => collect(String(key))); db.close(); resolve(); };
-          request.onerror = () => { db.close(); resolve(); };
+          if (!db.objectStoreNames.contains('keyvaluepairs')) { db.close(); resolve(null); return; }
+          const request = db.transaction('keyvaluepairs').objectStore('keyvaluepairs').get(key);
+          request.onsuccess = () => {
+            db.close();
+            const value = request.result;
+            resolve(value ? new Uint8Array(value instanceof ArrayBuffer ? value : value.buffer || value) : null);
+          };
+          request.onerror = () => { db.close(); resolve(null); };
         };
-        open.onerror = () => resolve();
+        open.onerror = () => resolve(null);
       });
     }
-    return stamps.length ? Math.max(...stamps) : 0;
+    const canonical = (value) => JSON.stringify(value, (k, v) => (v && typeof v === 'object' && !Array.isArray(v)
+      ? Object.fromEntries(Object.keys(v).sort().map((name) => [name, v[name]])) : v));
+    const live = canonical(window.__pluginApis__.getDatabase().pluginCustomStorage ?? null);
+    const header = 'RISUSAVE\0';
+    if (!bytes || new TextDecoder().decode(bytes.subarray(0, header.length)) !== header) return { live, saved: null };
+    let offset = header.length;
+    let saved = null;
+    while (offset + 7 <= bytes.length) {
+      const type = bytes[offset];
+      const compressed = bytes[offset + 1] === 1;
+      const nameLength = bytes[offset + 2];
+      const name = new TextDecoder().decode(bytes.subarray(offset + 3, offset + 3 + nameLength));
+      const length = new DataView(bytes.buffer, bytes.byteOffset + offset + 3 + nameLength, 4).getUint32(0, true);
+      let data = bytes.subarray(offset + 7 + nameLength, offset + 7 + nameLength + length);
+      offset += 7 + nameLength + length;
+      if (type !== 11 || name !== 'pluginStorage') continue;
+      if (compressed) data = new Uint8Array(await new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer());
+      saved = canonical(JSON.parse(new TextDecoder().decode(data)));
+    }
+    return { live, saved };
   });
 }
 
@@ -236,9 +257,21 @@ async function databaseLocation(page) {
   });
 }
 
-async function waitHostSaved(page, since) {
-  await until('HOST_SAVE_TIMEOUT', async () => (await newestDbBackup(page)) > since + 600);
-  await sleep(1000);
+// Waits until the saved database holds exactly the live plugin storage. A backup timestamp is no
+// proof: stock saves 0-500 ms after a change and then stops saving, so a fixed "newer than
+// change + N ms" threshold either misses a fast save forever or accepts a save that began
+// before the change.
+async function waitHostSaved(page) {
+  let last = null;
+  try {
+    await until('HOST_SAVE_TIMEOUT', async () => {
+      last = await savedVsLive(page);
+      return last.saved !== null && last.saved === last.live;
+    });
+  } catch (error) {
+    error.data = last;
+    throw error;
+  }
 }
 
 async function runTool(page) {
@@ -337,7 +370,7 @@ async function main() {
     if (scenario === 'venue') {
       // Venue sanity only (no tool): the probe can write, and deleting the cold files reproduces the dead state.
       await seed(page, [['alpha', 1]]);
-      await waitHostSaved(page, Date.now() - FLUSH_SETTLE_MS);
+      await waitHostSaved(page);
       const deleted = await coldFiles(page, 'delete');
       step('cold files deleted', { count: deleted.length });
       await reload(page);
@@ -373,8 +406,7 @@ async function main() {
       gate(location.opfs !== location.idb, 'DATABASE_LOCATION_AMBIGUOUS', location);
       gate(location.opfs === (scenario === 'opfs-db'), 'DATABASE_LOCATION_NOT_EXERCISED', location);
       await page.evaluate(() => { window.__pluginApis__.getDatabase().pluginCustomStorage.rpfLegacyInline = 'keep-me'; });
-      const since = Date.now();
-      await waitHostSaved(page, since);
+      await waitHostSaved(page);
       const dead = await pointer(page);
       const deleted = await coldFiles(page, 'delete');
       step('cold files deleted (OPFS eviction)', { pointer: dead, count: deleted.length });
@@ -418,11 +450,10 @@ async function main() {
         const raced = await store(page, 'get', 'raced');
         gate(raced.ok && raced.value === 'during-confirmation', 'RACED_VALUE_LOST', raced);
       }
-      const beforeWrite = Date.now();
       const write = await store(page, 'set', 'gamma', { after: 'reset' });
       gate(write.ok, 'WRITE_AFTER_RESET_FAILED', write);
       await sleep(FLUSH_SETTLE_MS);
-      await waitHostSaved(page, beforeWrite);
+      await waitHostSaved(page);
       await reload(page);
       const reread = await store(page, 'get', 'gamma');
       gate(reread.ok && reread.value?.after === 'reset', 'WRITE_AFTER_RESET_NOT_PERSISTED', reread);
@@ -433,9 +464,8 @@ async function main() {
       const newest = await pointer(page);
       // An older database restored over the profile points at an index that no longer exists,
       // while the newest index is still on disk.
-      const since = Date.now();
       await page.evaluate(() => { window.__pluginApis__.getDatabase().pluginCustomStorage._coldpluginIndex = crypto.randomUUID(); });
-      await waitHostSaved(page, since);
+      await waitHostSaved(page);
       step('pointer moved to a missing index', { newest });
       await reload(page);
       await expectDead(page);

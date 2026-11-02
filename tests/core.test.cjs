@@ -305,7 +305,7 @@ test('recover sets only the live pointer, confirms a new save and reopens exact 
     });
     assert.throws(() => reopen(f, { _coldpluginIndex: 'dead' }), /Failed to load/);
     assert.deepEqual(await recover(f.env, { pointer: 'dead', candidateId: 'good', timeoutMs: 5000 }), { confirmed: true, persistedPointer: 'good' });
-    assert.equal(sleeps, 2, 'the stale in-flight save must not confirm success');
+    assert.equal(sleeps, 4, 'the stale in-flight save cannot confirm, and the live edit must settle');
     assert.deepEqual(f.calls.writes, [['set', '_coldpluginIndex', 'good']]);
     assert.strictEqual(f.live.inline, legacy);
     assert.strictEqual(f.live._coldplugin, map);
@@ -439,7 +439,7 @@ test('location selection respects OPFS flag, migrated and existing IndexedDB dat
 
 test('missing/foreign/damaged save files never falsely confirm an absent pointer', async () => {
   const read = api('readPersistedPointer');
-  const f = fixture();
+  const f = fixture({ storage: {} });
   f.onSleep(() => f.forage.set(`${BACKUP}${f.calls.sleeps}.bin`, new Uint8Array()));
   assert.deepEqual(await read(f.env), { format: 'unknown' });
   for (const bytes of [Buffer.from('other'), Buffer.from('RISUSAVE\0\x0b'),
@@ -448,13 +448,13 @@ test('missing/foreign/damaged save files never falsely confirm an absent pointer
   ]) {
     f.putDatabase(bytes);
     assert.deepEqual(await read(f.env), { format: 'unknown' });
-    await assert.rejects(core.waitForPersisted(f.env, (pointer) => pointer === null, { timeoutMs: 1 }), { code: 'SAVE_UNCONFIRMED' });
+    await assert.rejects(core.waitForPersisted(f.env, (pointer) => pointer === null, { timeoutMs: 3000 }), { code: 'SAVE_UNCONFIRMED' });
   }
   // A well-formed save without the plugin storage block also reads as "no pointer"; it says
   // nothing about the pointer, so it must not confirm a reset either.
   f.putDatabase(Buffer.concat([Buffer.from('RISUSAVE\0'), block(0, 'root', {})]));
   assert.deepEqual(await read(f.env), { format: 'risusave', hasBlock: false, pointer: null });
-  await assert.rejects(core.waitForPersisted(f.env, (pointer) => pointer === null, { timeoutMs: 1 }), { code: 'SAVE_UNCONFIRMED' });
+  await assert.rejects(core.waitForPersisted(f.env, (pointer) => pointer === null, { timeoutMs: 3000 }), { code: 'SAVE_UNCONFIRMED' });
 });
 
 test('wait gate reads only after a strictly newer numeric backup, never trusting the live object', async () => {
@@ -474,9 +474,9 @@ test('wait gate reads only after a strictly newer numeric backup, never trusting
       if (ticks === 3) f.persist({ number: 101 });
     });
     assert.deepEqual(await wait(f.env, (pointer) => pointer === 'new', { timeoutMs: 5000 }), { confirmed: true, persistedPointer: 'new' });
-    assert.equal(ticks, 3, 'unannounced DB write and older backup do not permit a re-read');
+    assert.equal(ticks, 4, 'unannounced DB writes and older backups cannot open the gate, then the live edit must settle');
     const reads = location === 'idb' ? f.calls.get.filter((key) => key === DB).length : f.calls.files.filter((key) => key === hex(DB)).length;
-    assert.equal(reads, 1, 'no initial database read can be used as an edit receipt');
+    assert.equal(reads, location === 'idb' ? 1 : 2, 'IDB retains its receipt; OPFS still re-reads each gated poll');
   }
 });
 
@@ -594,7 +594,7 @@ test('round1 unsettled persisted databases refuse both edits without any mutatio
 
 test('round1 an initially matching disk value cannot confirm before a post-baseline save', async (t) => {
   for (const location of ['idb', 'opfs']) await t.test(location, async () => {
-    const f = fixture({ location });
+    const f = fixture({ location, storage: { _coldpluginIndex: 'good' } });
     f.persist({ number: 1, from: { _coldpluginIndex: 'good' } });
     let ticks = 0;
     f.onSleep(() => {
@@ -602,7 +602,7 @@ test('round1 an initially matching disk value cannot confirm before a post-basel
       f.persist({ number: ticks + 1, from: { _coldpluginIndex: ticks === 1 ? 'dead' : 'good' } });
     });
     const result = await core.waitForPersisted(f.env, (pointer) => pointer === 'good', { timeoutMs: 3000 });
-    assert.equal(ticks, 2, 'initially matching bytes precede a stale in-flight write, not this edit');
+    assert.equal(ticks, 4, 'initially matching bytes precede a stale in-flight write; only its replacement plus settling confirms');
     assert.deepEqual(result, { confirmed: true, persistedPointer: 'good' });
     assert.equal(stockSaveView(f.persisted()).storage._coldpluginIndex, 'good');
   });
@@ -614,8 +614,8 @@ test('round1 receipt baseline is captured before the live edit, including an imm
     f.add('good', index());
     f.persist({ number: 1 });
     f.onWrite(() => f.persist({ number: 2 }));
-    const result = await confirms(core[method](f.env, { pointer: 'dead', candidateId: 'good', timeoutMs: 1000 }));
-    assert.equal(f.calls.sleeps, 0, 'a save triggered by the edit is strictly newer than the captured baseline');
+    const result = await confirms(core[method](f.env, { pointer: 'dead', candidateId: 'good', timeoutMs: 3000 }));
+    assert.equal(f.calls.sleeps, 4, 'the immediate save passes the pre-edit baseline gate, then the edit must settle');
     assert.deepEqual(result, { confirmed: true, persistedPointer: method === 'recover' ? 'good' : null });
     assert.equal(f.calls.writes.length, 1);
   });
@@ -634,7 +634,7 @@ test('round1 OPFS retries after the backup name appears before database close', 
     });
     const result = await confirms(core[method](f.env, { pointer: 'dead', candidateId: 'good', timeoutMs: 2000 }));
     assert.deepEqual(result, { confirmed: true, persistedPointer: method === 'recover' ? 'good' : null });
-    assert.equal(ticks, 2);
+    assert.equal(ticks, 4);
     assert.deepEqual(reopen(f, stockSaveView(f.persisted()).storage), method === 'recover' ? index([{ k: 'saved', s: 'true' }]) : index());
   });
 });
@@ -655,11 +655,11 @@ test('round1 IndexedDB unknown receipts retry without another backup, but retrie
     });
     const result = await core.recover(f.env, { pointer: 'dead', candidateId: 'good', timeoutMs: 2000 });
     assert.deepEqual(result, { confirmed: true, persistedPointer: 'good' });
-    assert.equal(ticks, 2);
+    assert.equal(ticks, 4);
     assert.deepEqual(reopen(f, stockSaveView(f.persisted()).storage), index([{ k: 'value', s: '{"kept":true}' }]));
   });
   await t.test('exhausted unknown retries rearm only on a newer backup', async () => {
-    const f = fixture();
+    const f = fixture({ storage: {} });
     f.persist({ number: 1 });
     let ticks = 0;
     const reads = [];
@@ -682,8 +682,8 @@ test('round1 IndexedDB unknown receipts retry without another backup, but retrie
 });
 
 test('round1 a readable stale IndexedDB receipt waits for another backup, not an unannounced byte change', async () => {
-  const f = fixture();
-  f.persist({ number: 1 });
+  const f = fixture({ storage: { _coldpluginIndex: 'good' } });
+  f.persist({ number: 1, from: { _coldpluginIndex: 'dead' } });
   let ticks = 0;
   const reads = [];
   f.onSleep(() => {
@@ -710,6 +710,7 @@ test('round1 valid successor receipts survive plugin flushes and reopen their ex
     f.persist({ number: 1 });
     const coldBefore = [...f.files].filter(([name]) => name.startsWith('coldstorage_'));
     f.onSleep(() => {
+      if (f.calls.sleeps !== 1) return;
       assert.deepEqual(f.calls.writes, [method === 'recover' ? ['set', '_coldpluginIndex', 'good'] : ['delete', '_coldpluginIndex']]);
       assert.strictEqual(f.live.legacy, legacy);
       assert.deepEqual([...f.files].filter(([name]) => name.startsWith('coldstorage_')), coldBefore);
@@ -718,9 +719,9 @@ test('round1 valid successor receipts survive plugin flushes and reopen their ex
       f.live._coldpluginIndex = 'successor';
       f.persist({ number: 2 });
     });
-    assert.deepEqual(await core[method](f.env, { pointer: 'dead', candidateId: 'good', timeoutMs: 1500 }),
+    assert.deepEqual(await core[method](f.env, { pointer: 'dead', candidateId: 'good', timeoutMs: 3500 }),
       { confirmed: true, persistedPointer: 'successor' });
-    assert.equal(f.calls.sleeps, 1);
+    assert.equal(f.calls.sleeps, 5);
     assert.deepEqual(reopen(f, stockSaveView(f.persisted()).storage), successor);
     assert.deepEqual(JSON.parse(gunzipSync(f.files.get(coldName('payload')).bytes)), { body: ['exact large contents'] });
   });
@@ -728,16 +729,18 @@ test('round1 valid successor receipts survive plugin flushes and reopen their ex
 
 test('round1 unverified successors and the original dead id never confirm', async (t) => {
   for (const method of ['recover', 'reset']) for (const state of ['missing', 'invalid', 'uncertain', 'dead']) await t.test(`${method} ${state}`, async () => {
-    const f = fixture();
+    const storage = { _coldpluginIndex: 'dead' };
+    const f = fixture({ storage });
     f.add('good', index());
     if (state === 'invalid') f.add('successor', { type: TYPE, entries: [], trash: null });
     if (state === 'uncertain') f.files.set(coldName('successor'), { bytes: Buffer.from('bad gzip'), time: 1 });
     f.persist({ number: 1 });
     f.onSleep(() => {
       if (state === 'dead') f.add('dead', index([{ k: 'resurrected-old-timeline', s: '1' }]));
-      f.persist({ number: 2, from: { _coldpluginIndex: state === 'dead' ? 'dead' : 'successor' } });
+      storage._coldpluginIndex = state === 'dead' ? 'dead' : 'successor';
+      f.persist({ number: 2, from: { _coldpluginIndex: storage._coldpluginIndex } });
     });
-    await assert.rejects(core[method](f.env, { pointer: 'dead', candidateId: 'good', timeoutMs: 1000 }), { code: 'SAVE_UNCONFIRMED' });
+    await assert.rejects(core[method](f.env, { pointer: 'dead', candidateId: 'good', timeoutMs: 3000 }), { code: 'SAVE_UNCONFIRMED' });
     assert.deepEqual(f.calls.writes, [method === 'recover' ? ['set', '_coldpluginIndex', 'good'] : ['delete', '_coldpluginIndex']]);
   });
 });
@@ -807,7 +810,7 @@ test('round1 decoded invalid indexes permit reset while uncertain candidate file
     assert.deepEqual(diagnosis.candidates, [{ id: 'good', lastModified: 1, keyCount: 1, sampleKeys: ['keep'], largeCount: 0, missingLarge: 0 }]);
     assert.deepEqual(await core.findCandidates(f.env, { excludeId: 'dead' }), diagnosis.candidates, 'public candidate API remains an array');
     f.onSleep(() => f.persist({ number: 2 }));
-    assert.deepEqual(await core.reset(f.env, { pointer: 'dead', timeoutMs: 1000 }), { confirmed: true, persistedPointer: null });
+    assert.deepEqual(await core.reset(f.env, { pointer: 'dead', timeoutMs: 3000 }), { confirmed: true, persistedPointer: null });
     assert.equal(Object.hasOwn(f.live, '_coldpluginIndex'), false);
     assert.deepEqual(reopen(f, stockSaveView(f.persisted()).storage), index());
   });
@@ -859,7 +862,7 @@ test('round1 createWritable capability controls both database reads and repair r
     f.add('good', index());
     assert.equal((await core.readPersistedPointer(f.env)).pointer, 'dead', 'stock keeps IDB without createWritable');
     f.onSleep(() => f.persist({ number: 2 }));
-    assert.deepEqual(await core[method](f.env, { pointer: 'dead', candidateId: 'good', timeoutMs: 1000 }),
+    assert.deepEqual(await core[method](f.env, { pointer: 'dead', candidateId: 'good', timeoutMs: 3000 }),
       { confirmed: true, persistedPointer: method === 'recover' ? 'good' : null });
     assert.ok(!f.calls.files.includes(hex(DB)));
   });
@@ -913,6 +916,164 @@ test('round1 accountHint reflects only dosync avoid without altering candidate s
   f.local.set('dosync', 'other');
   assert.equal((await core.diagnose(f.env)).accountHint, false);
   assert.deepEqual(f.calls.writes, []);
+});
+
+// Stock ea61945: 1000 ms base plugin flush + 500 ms host idle + one 500 ms tool poll.
+// Independent timing oracle: do not derive this minimum from the implementation's constants.
+const SETTLE_MS = 2000;
+
+// Model the host's immutable index commits separately from the tool's live-object writes.
+function commitIndex(f, storage, id, value, { persisted = true, number } = {}) {
+  f.add(id, value);
+  storage._coldpluginIndex = id;
+  if (persisted) f.persist({ number });
+}
+
+test('settle stale persisted S1 never confirms while the live store holds S2', async (t) => {
+  for (const location of ['idb', 'opfs']) for (const method of ['recover', 'reset']) await t.test(`${location} ${method}`, async () => {
+    const legacy = { nested: ['preserved'] };
+    const storage = { _coldpluginIndex: 'dead', legacy };
+    const f = fixture({ location, storage });
+    const s1 = index([{ k: 'legacy', s: JSON.stringify(legacy) }]);
+    const s2 = index([...s1.entries, { k: 'raced', s: '"during-confirmation"' }, { k: 'large', l: 'payload' }],
+      [{ id: 'S1', at: 600, index: true }]);
+    f.add('good', index([{ k: 'candidate', s: '42' }]));
+    f.add('payload', { exact: ['large contents'] });
+    f.persist({ number: 1 });
+    const before = stockSaveView(f.persisted());
+    const started = f.env.now();
+    f.onSleep(() => {
+      if (f.calls.sleeps === 1) {
+        commitIndex(f, storage, 'S1', s1, { number: 2 });
+        commitIndex(f, storage, 'S2', s2, { persisted: false });
+      }
+      if (f.calls.sleeps === 7) f.persist({ number: 3 });
+    });
+    const result = await confirms(core[method](f.env, { pointer: 'dead', candidateId: 'good', timeoutMs: 5000 }));
+    assert.deepEqual(result, { confirmed: true, persistedPointer: 'S2' }, 'an older valid successor is not the current store');
+    assert.equal(f.env.now() - started, 3500, 'even a settled S2 must wait for its own database save');
+    const after = stockSaveView(f.persisted());
+    assert.equal(after.storage._coldpluginIndex, storage._coldpluginIndex);
+    assert.deepEqual(reopen(f, after.storage), s2, 'reload retains every entry, large reference and trash identity');
+    assert.deepEqual(JSON.parse(gunzipSync(f.files.get(coldName('payload')).bytes)), { exact: ['large contents'] });
+    assert.strictEqual(f.live.legacy, legacy);
+    assert.deepEqual(after.blocks.filter((b) => b.type !== 11), before.blocks.filter((b) => b.type !== 11));
+    assert.deepEqual(f.calls.writes, [method === 'recover' ? ['set', '_coldpluginIndex', 'good'] : ['delete', '_coldpluginIndex']]);
+  });
+});
+
+test('settle an early matching S1 receipt cannot beat S2 inside the quiet window', async (t) => {
+  for (const location of ['idb', 'opfs']) for (const method of ['recover', 'reset']) await t.test(`${location} ${method}`, async () => {
+    const storage = { _coldpluginIndex: 'dead' };
+    const f = fixture({ location, storage });
+    f.add('good', index());
+    f.persist({ number: 1 });
+    const started = f.env.now();
+    const s2 = index([{ k: 'raced', s: '"kept after immediate reload"' }], [{ id: 'S1', at: 1600, index: true }]);
+    f.onSleep(() => {
+      if (f.calls.sleeps === 1) commitIndex(f, storage, 'S1', index([{ k: 'legacy', s: 'true' }]), { number: 2 });
+      if (f.calls.sleeps === 3) commitIndex(f, storage, 'S2', s2, { number: 3 });
+    });
+    const result = await confirms(core[method](f.env, { pointer: 'dead', candidateId: 'good', timeoutMs: 5000 }));
+    assert.deepEqual(result, { confirmed: true, persistedPointer: 'S2' });
+    assert.equal(f.env.now() - started, 1500 + SETTLE_MS, 'the most recent pointer change, not wait start, owns the settle clock');
+    assert.deepEqual(reopen(f, stockSaveView(f.persisted()).storage), s2);
+  });
+});
+
+test('settle idle reset normalizes deleted live undefined to saved null and confirms without another backup', async (t) => {
+  for (const location of ['idb', 'opfs']) await t.test(location, async () => {
+    const legacy = { deep: ['keep'] };
+    const f = fixture({ location, storage: { _coldpluginIndex: 'dead', legacy } });
+    f.persist({ number: 1 });
+    const started = f.env.now();
+    f.onSleep(() => { if (f.calls.sleeps === 1) f.persist({ number: 2 }); });
+    const result = await confirms(core.reset(f.env, { pointer: 'dead', timeoutMs: 5000 }));
+    assert.deepEqual(result, { confirmed: true, persistedPointer: null });
+    assert.equal(f.env.now() - started, SETTLE_MS, 'an idle reset settles well inside the existing timeout');
+    assert.equal(Object.hasOwn(f.live, '_coldpluginIndex'), false);
+    assert.strictEqual(f.live.legacy, legacy);
+    assert.deepEqual(stockSaveView(f.persisted()).storage, { legacy });
+    assert.deepEqual(reopen(f, stockSaveView(f.persisted()).storage), index());
+    if (location === 'idb') assert.equal(f.calls.get.filter((key) => key === DB).length, 2,
+      'retain the matching post-edit read: one preflight + one new-backup read, no extra saves or reads');
+  });
+});
+
+test('settle recovery keeps an immediate matching receipt until quiet without needing another save', async (t) => {
+  for (const location of ['idb', 'opfs']) await t.test(location, async () => {
+    const f = fixture({ location });
+    const wanted = index([{ k: 'restored', s: '{"exact":[1,false]}' }, { k: 'large', l: 'payload' }]);
+    f.add('good', wanted);
+    f.add('payload', { exact: ['payload'] });
+    f.persist({ number: 1 });
+    const started = f.env.now();
+    f.onWrite(() => f.persist({ number: 2 }));
+    const result = await confirms(core.recover(f.env, { pointer: 'dead', candidateId: 'good', timeoutMs: 5000 }));
+    assert.deepEqual(result, { confirmed: true, persistedPointer: 'good' });
+    assert.equal(f.env.now() - started, SETTLE_MS, 'even an immediate durable edit needs the stock flush/save window');
+    assert.deepEqual(reopen(f, stockSaveView(f.persisted()).storage), wanted);
+    assert.deepEqual(f.calls.writes, [['set', '_coldpluginIndex', 'good']]);
+    if (location === 'idb') assert.equal(f.calls.get.filter((key) => key === DB).length, 2);
+  });
+});
+
+test('settle continuous pointer movement times out without reverting or replaying the edit', async (t) => {
+  for (const location of ['idb', 'opfs']) for (const method of ['recover', 'reset']) await t.test(`${location} ${method}`, async () => {
+    const storage = { _coldpluginIndex: 'dead' };
+    const f = fixture({ location, storage });
+    f.add('good', index());
+    f.persist({ number: 1 });
+    const started = f.env.now();
+    f.onSleep(() => commitIndex(f, storage, `moving-${f.calls.sleeps}`, index([{ k: 'latest', s: String(f.calls.sleeps) }]),
+      { number: f.calls.sleeps + 1 }));
+    await assert.rejects(core[method](f.env, { pointer: 'dead', candidateId: 'good', timeoutMs: 4000 }), (error) =>
+      error instanceof core.FixError && error.code === 'SAVE_UNCONFIRMED' && error.message === '변경은 했지만, 리스 저장 파일에 반영된 것을 1분 안에 확인하지 못했어요.');
+    assert.equal(f.env.now() - started, 4000);
+    assert.equal(stockSaveView(f.persisted()).storage._coldpluginIndex, 'moving-8');
+    assert.equal(storage._coldpluginIndex, 'moving-8');
+    assert.deepEqual(reopen(f, stockSaveView(f.persisted()).storage), index([{ k: 'latest', s: '8' }]));
+    assert.deepEqual(f.calls.writes, [method === 'recover' ? ['set', '_coldpluginIndex', 'good'] : ['delete', '_coldpluginIndex']]);
+  });
+});
+
+test('settle a newer unknown IDB save supersedes an earlier matching receipt', async () => {
+  const f = fixture({ storage: { _coldpluginIndex: 'good' } });
+  f.persist({ number: 1, from: { _coldpluginIndex: 'dead' } });
+  f.onSleep(() => {
+    if (f.calls.sleeps === 1) f.persist({ number: 2 });
+    if (f.calls.sleeps === 3) {
+      f.forage.set(`${BACKUP}3.bin`, new Uint8Array());
+      f.putDatabase(Buffer.from('newer but not yet readable'));
+    }
+  });
+  await assert.rejects(core.waitForPersisted(f.env, (pointer) => pointer === 'good', { timeoutMs: 4000 }),
+    { code: 'SAVE_UNCONFIRMED' });
+});
+
+test('settle pointer movement during asynchronous successor verification resets the quiet window', async (t) => {
+  for (const location of ['idb', 'opfs']) await t.test(location, async () => {
+    const storage = { _coldpluginIndex: 'dead' };
+    const f = fixture({ location, storage });
+    f.persist({ number: 1 });
+    const started = f.env.now();
+    const s2 = index([{ k: 'last-write', s: '"preserved"' }]);
+    let movedAt;
+    f.onSleep(() => {
+      if (f.calls.sleeps === 1) commitIndex(f, storage, 'S1', index(), { number: 2 });
+      if (movedAt !== undefined && storage._coldpluginIndex === 'S2') f.persist({ number: 3 });
+    });
+    f.onFile((name) => {
+      if (name === coldName('S1') && f.env.now() - started >= 2500 && movedAt === undefined) {
+        movedAt = f.env.now();
+        commitIndex(f, storage, 'S2', s2, { persisted: false });
+      }
+    });
+    const result = await confirms(core.reset(f.env, { pointer: 'dead', timeoutMs: 6000 }));
+    assert.deepEqual(result, { confirmed: true, persistedPointer: 'S2' }, 'use the live pointer after awaited verification');
+    assert.equal(f.env.now() - movedAt, SETTLE_MS);
+    assert.deepEqual(reopen(f, stockSaveView(f.persisted()).storage), s2);
+  });
 });
 
 test('core bundles without CommonJS and still parses after full-line comments and newlines are removed', () => {
