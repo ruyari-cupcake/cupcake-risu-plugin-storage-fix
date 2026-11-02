@@ -5,13 +5,12 @@ Caller map (read first, answer every row): `.report/caller-map.md`.
 
 ## Observation (live, stock v2026.10.292 = GitHub `ea61945`, IndexedDB database, bookmarklet form)
 
-Record: `tests/live/work/result-reset-race-bookmarklet.json` (copy: `/home/cupcake/workspace/cupcake/_work/plugin-storage-fix-20261103/evidence/r2/`).
+Record: `tests/live/work/result-reset-race-bookmarklet.json`.
 Seeded store with a legacy inline key → cold files deleted → dead state → tool reset → right after the live pointer cleared, the
 probe plugin wrote `raced = 'during-confirmation'` (19:38:55.39Z) → tool showed ✅ (56.70Z) → the driver pressed the panel's
 "지금 새로고침" immediately → after reload the pointer was a new valid id whose index has the legacy key but `raced` is `null`.
 
-Stock mechanics (cite and re-verify yourself; stock source copy at
-`/tmp/claude-1000/-home-cupcake-workspace-cupcake/56dd1ac7-b722-49ba-a41a-fbba03810b20/scratchpad/risu-head/src`, HEAD `ea61945`):
+Stock mechanics (cite and re-verify yourself against a `git clone` of `kwaroran/RisuAI` at HEAD `ea61945`):
 - First plugin call after the edit: `load` → `doLoad` (pointer absent → empty) → `migrateLegacy` → immediate `flush` → index S1
   (legacy key only), live pointer = S1 (`ts/process/pluginStorageStore.ts` L169-222, commit L474-496).
 - The call's own value is only `markDirty` → `scheduleFlush(flushDelay)`; it lands in the NEXT index S2 ≈ 1 s later
@@ -75,8 +74,8 @@ every newline deleted). Do not edit `src/ui.js`, `src/install.template.html`, `R
 
 ## Verification venue (report each as RUN/PASSED, or COULD NOT VERIFY HERE with the reason)
 
-In `/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix` (cwd stays there; never `cd` elsewhere):
+In the repository root:
 `npm run build && npm test && npm run mutate`, then the live scenario
-`STOCK_DIR=/home/cupcake/cpm-repro/stock-dist/v2026.10.292 PLAYWRIGHT_MODULE=/home/cupcake/workspace/cupcake/Playwright/workspace/node_modules/playwright node tests/live/drive.mjs reset-race bookmarklet`
+`STOCK_DIR=<stock dist> PLAYWRIGHT_MODULE=<playwright> node tests/live/drive.mjs reset-race bookmarklet`
 and `… node tests/live/drive.mjs reset bookmarklet` (both must print PASS; the driver's immediate panel reload is the adversarial
 case — do not add waits to the driver). The orchestrator runs the full gate afterwards.

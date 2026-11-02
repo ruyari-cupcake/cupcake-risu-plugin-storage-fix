@@ -1,6 +1,6 @@
 # Core fix spec — round 1 (src/core.js + tests)
 
-Source of truth for WHY: `/home/cupcake/workspace/cupcake/_work/plugin-storage-fix-20261103/evidence/round1-synthesis.md`
+Source of truth for WHY: the maintainer's round-1 review synthesis (accept/reject rows R1–R15; not in this repo)
 (accepted rows R1–R5, R14 concern core/tests; the UI rows are done separately by the orchestrator).
 Base contract stays `.report/core-contract.md`; this file only lists what changes.
 
