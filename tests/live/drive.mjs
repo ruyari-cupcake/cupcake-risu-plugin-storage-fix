@@ -3,7 +3,8 @@
 //   PLAYWRIGHT_MODULE=/path/to/node_modules/playwright STOCK_DIR=/path/to/risu/dist \
 //     node tests/live/drive.mjs <scenario> [form]
 //
-// scenario: venue (harness sanity, no tool) | healthy | reset | reset-race | recover | opfs-db | account
+// scenario: venue (harness sanity, no tool) | healthy | reset | reset-race | recover | recover-account-hint
+//           | opfs-db | account | aged-restore | aged-reset (aged = host clock moved past stock trash grace)
 // form:     bookmarklet (default) | console | loader   (loader + LOCAL_CONSOLE=1 serves the hosted
 //           console URL from this checkout, so it can run before a release)
 // BASE_URL=https://risuai.xyz/ runs against that origin instead of serving STOCK_DIR.
@@ -30,6 +31,12 @@ const INDEX_ERROR = 'Failed to load plugin storage index';
 const BOOT_TIMEOUT_MS = 150000;
 const STEP_TIMEOUT_MS = 60000;
 const FLUSH_SETTLE_MS = 2500;
+// Aged scenarios move the host clock past stock's trash grace periods (pluginStorageStore.ts L55-58:
+// indexTrashGrace 1 h for old indexes, trashGrace 24 h for large values).
+const CLOCK_OFFSET_KEY = '__rpfClockOffsetMs';
+const HOUR_MS = 60 * 60 * 1000;
+const PAST_INDEX_GRACE_MS = 2 * HOUR_MS;
+const PAST_LARGE_GRACE_MS = 25 * HOUR_MS;
 // risuai.xyz (BASE_URL) can take well over 20 s to reload its bundle.
 const NAVIGATION_TIMEOUT_MS = 120000;
 
@@ -314,6 +321,33 @@ async function reload(page) {
   await boot(page, null);
 }
 
+// Saves first (a pending write must not be lost by the reload), then reopens the page `ms` later on
+// the host clock and proves the shift took effect.
+async function advanceClock(page, ms) {
+  await waitHostSaved(page);
+  const total = await page.evaluate(({ key, ms }) => {
+    const next = Number(localStorage.getItem(key) || 0) + ms;
+    localStorage.setItem(key, String(next));
+    return next;
+  }, { key: CLOCK_OFFSET_KEY, ms });
+  await reload(page);
+  const ahead = await page.evaluate(() => Date.now() - performance.timeOrigin - performance.now());
+  gate(ahead >= total - 60000, 'CLOCK_NOT_SHIFTED', { ahead, total });
+  step('host clock moved ahead', { hours: Math.round(total / HOUR_MS) });
+}
+
+// Proves the store reads every expected value, the dead id never came back, and the pointer's
+// index file exists.
+async function expectValues(page, expected, dead) {
+  for (const [key, value] of Object.entries(expected)) {
+    const read = await store(page, 'get', key);
+    gate(read.ok && JSON.stringify(read.value) === JSON.stringify(value), 'VALUE_WRONG', { key, read, value });
+  }
+  const now = await pointer(page);
+  gate(now !== dead, 'DEAD_POINTER_CAME_BACK', { now });
+  gate(now === null || (await coldFiles(page, 'list')).includes(`coldstorage_${now}.json`), 'POINTER_HAS_NO_FILE', { now });
+}
+
 async function seed(page, entries) {
   for (const [key, value] of entries) {
     const result = await store(page, 'set', key, value);
@@ -342,12 +376,27 @@ async function main() {
   const profile = fs.mkdtempSync(path.join(WORK, `profile-${scenario}-`));
   const context = await chromium.launchPersistentContext(profile, { headless: true, viewport: { width: 1280, height: 900 }, locale: 'en-US', args: ['--no-sandbox'] });
   try {
-    await context.addInitScript((opfs) => {
+    await context.addInitScript(({ opfs, clockKey }) => {
       globalThis.__RISU_LEGAL_CONFIGURED__ = true;
       try {
         if (opfs && window === window.top && !localStorage.getItem('opfs_flag!')) localStorage.setItem('opfs_flag!', 'able');
       } catch (error) {}
-    }, scenario === 'opfs-db');
+      // Aged scenarios: the host page's wall clock runs ahead by a stored offset (fixed for the page's
+      // lifetime, so durations stay real). Stock code is untouched; only "now" moves, as if the user
+      // came back hours later. Stock trash grace compares Date.now() (pluginStorageStore.ts L318-343).
+      try {
+        const offset = window === window.top ? Number(localStorage.getItem(clockKey) || 0) : 0;
+        if (offset > 0) {
+          const RealDate = Date;
+          const shiftedNow = () => RealDate.now() + offset;
+          globalThis.Date = new Proxy(RealDate, {
+            construct: (target, args, newTarget) => (args.length ? Reflect.construct(target, args, newTarget) : Reflect.construct(target, [shiftedNow()], newTarget)),
+            apply: (target) => new target(shiftedNow()).toString(),
+            get: (target, prop, receiver) => (prop === 'now' ? shiftedNow : Reflect.get(target, prop, receiver)),
+          });
+        }
+      } catch (error) {}
+    }, { opfs: scenario === 'opfs-db', clockKey: CLOCK_OFFSET_KEY });
     if (form === 'loader' && process.env.LOCAL_CONSOLE === '1') {
       await context.route(HOSTED_CONSOLE_URL, (route) => route.fulfill({ status: 200, contentType: 'application/javascript', body: fs.readFileSync(path.join(DIST, 'console.js'), 'utf8') }));
     }
@@ -483,6 +532,110 @@ async function main() {
       const beta = await store(page, 'get', 'beta');
       gate(alpha.ok && alpha.value === 2 && beta.ok && beta.value === 'latest', 'RECOVERED_VALUES_WRONG', { alpha, beta });
       step('recovered values readable after reload', { alpha: alpha.value, beta: beta.value });
+    } else if (scenario === 'recover-account-hint') {
+      // A browser that used Risu account storage and logged out / declined sync (stock sets
+      // localStorage.dosync = 'avoid'): the panel must warn first and preselect nothing.
+      await seed(page, [['alpha', 1]]);
+      await seed(page, [['alpha', 2], ['beta', 'latest']]);
+      const newest = await pointer(page);
+      await page.evaluate(() => { window.__pluginApis__.getDatabase().pluginCustomStorage._coldpluginIndex = crypto.randomUUID(); });
+      await waitHostSaved(page);
+      await reload(page);
+      await expectDead(page);
+      await page.evaluate(() => localStorage.setItem('dosync', 'avoid'));
+      await runTool(page);
+      await panelStatus(page, /목차 파일이 이 브라우저에 없어요/);
+      const detailText = await page.locator(`${PANEL} .detail`).innerText();
+      gate(detailText.includes('먼저 확인해 주세요') && detailText.includes('계정'), 'ACCOUNT_HINT_NOT_SHOWN', { detailText: detailText.slice(0, 300) });
+      gate(await page.locator(`${PANEL} input[name="candidate"]:checked`).count() === 0, 'CANDIDATE_PRESELECTED_WITH_ACCOUNT_HINT');
+      step('account hint shown, nothing preselected');
+      await page.locator(`${PANEL} button.recover`).click();
+      await panelStatus(page, /시점을 하나 골라 주세요/);
+      gate(await page.locator(`${PANEL} button.recover`).isVisible(), 'RECOVER_BUTTON_LOST_AFTER_EMPTY_PICK');
+      gate((await pointer(page)) !== newest, 'EMPTY_PICK_CHANGED_POINTER');
+      step('recover without a pick asks for one and changes nothing');
+      await page.locator(`${PANEL} input[name="candidate"][value="${newest}"]`).check();
+      await page.locator(`${PANEL} button.recover`).click();
+      const done = await panelStatus(page, /✅|⚠|❌ (?!플러그인 저장소 목차)/);
+      gate(done.startsWith('✅'), 'RECOVER_NOT_CONFIRMED', { done });
+      await page.evaluate(() => localStorage.removeItem('dosync'));
+      await reloadFromPanel(page);
+      gate((await pointer(page)) === newest, 'RECOVERED_POINTER_LOST_AFTER_RELOAD');
+      await expectValues(page, { alpha: 2, beta: 'latest' }, null);
+      step('deliberately picked index recovered and readable after reload');
+    } else if (scenario === 'aged-restore') {
+      // The natural dead state: an older database (pointing at index A) comes back after stock has
+      // already deleted A once its trash grace passed. Nothing is deleted by hand here.
+      await seed(page, [['alpha', 1]]);
+      await waitHostSaved(page);
+      const old = await pointer(page);
+      await seed(page, [['alpha', 2], ['beta', 'latest']]);
+      const newest = await pointer(page);
+      gate(old !== newest, 'SEED_DID_NOT_MOVE_POINTER');
+      await advanceClock(page, PAST_INDEX_GRACE_MS);
+      await expectValues(page, { alpha: 2, beta: 'latest' }, null);
+      await until('OLD_INDEX_NOT_COLLECTED', async () => !(await coldFiles(page, 'list')).includes(`coldstorage_${old}.json`));
+      step('stock deleted the old index after its trash grace', { old, newest });
+      await page.evaluate((id) => { window.__pluginApis__.getDatabase().pluginCustomStorage._coldpluginIndex = id; }, old);
+      await waitHostSaved(page);
+      await reload(page);
+      await expectDead(page);
+      step('older database restored over the profile → dead state');
+      await runTool(page);
+      await panelStatus(page, /목차 파일이 이 브라우저에 없어요/);
+      const first = page.locator(`${PANEL} input[name="candidate"]`).first();
+      gate((await first.getAttribute('value')) === newest && await first.isChecked(), 'NEWEST_NOT_FIRST_CHOICE', { first: await first.getAttribute('value'), newest });
+      await page.locator(`${PANEL} button.recover`).click();
+      const done = await panelStatus(page, /✅|⚠|❌ (?!플러그인 저장소 목차)/);
+      gate(done.startsWith('✅'), 'RECOVER_NOT_CONFIRMED', { done });
+      await reloadFromPanel(page);
+      gate((await pointer(page)) === newest, 'RECOVERED_POINTER_LOST_AFTER_RELOAD');
+      await expectValues(page, { alpha: 2, beta: 'latest' }, old);
+      step('recovered, values readable');
+      const write = await store(page, 'set', 'gamma', { after: 'recover' });
+      gate(write.ok, 'WRITE_AFTER_RECOVER_FAILED', write);
+      await sleep(FLUSH_SETTLE_MS);
+      await advanceClock(page, PAST_INDEX_GRACE_MS);
+      await expectValues(page, { alpha: 2, beta: 'latest', gamma: { after: 'recover' } }, old);
+      await advanceClock(page, PAST_LARGE_GRACE_MS);
+      await expectValues(page, { alpha: 2, beta: 'latest', gamma: { after: 'recover' } }, old);
+      step('values survive +2 h and +27 h reloads (stock trash collection ran each time)');
+      await runTool(page);
+      await panelStatus(page, /정상이에요/);
+      gate(!(await page.locator(`${PANEL} button.reset`).isVisible()), 'HEALTHY_OFFERS_RESET');
+      step('running the tool again later says healthy');
+    } else if (scenario === 'aged-reset') {
+      // Days later the browser evicted the cold files (OPFS) but kept the database.
+      await seed(page, [['alpha', 1], ['beta', 'two']]);
+      await page.evaluate(() => { window.__pluginApis__.getDatabase().pluginCustomStorage.rpfLegacyInline = 'keep-me'; });
+      await waitHostSaved(page);
+      const dead = await pointer(page);
+      await advanceClock(page, 3 * 24 * HOUR_MS);
+      const deleted = await coldFiles(page, 'delete');
+      step('cold files evicted days later', { count: deleted.length });
+      await reload(page);
+      await expectDead(page);
+      await runTool(page);
+      await panelStatus(page, /목차 파일이 이 브라우저에 없어요/);
+      await page.locator(`${PANEL} button.reset`).click();
+      await page.locator(`${PANEL} input.agree`).check();
+      await page.locator(`${PANEL} button.do-reset`).click();
+      const done = await panelStatus(page, /✅|⚠|❌ (?!플러그인 저장소 목차)/);
+      gate(done.startsWith('✅'), 'RESET_NOT_CONFIRMED', { done });
+      await reloadFromPanel(page);
+      await expectValues(page, { rpfLegacyInline: 'keep-me', alpha: null }, dead);
+      const write = await store(page, 'set', 'gamma', { after: 'reset' });
+      gate(write.ok, 'WRITE_AFTER_RESET_FAILED', write);
+      await sleep(FLUSH_SETTLE_MS);
+      for (const ms of [PAST_INDEX_GRACE_MS, PAST_LARGE_GRACE_MS]) {
+        await advanceClock(page, ms);
+        await expectValues(page, { rpfLegacyInline: 'keep-me', alpha: null, gamma: { after: 'reset' } }, dead);
+      }
+      step('reset store stays healthy across +2 h and +27 h reloads');
+      await runTool(page);
+      await panelStatus(page, /정상이에요/);
+      gate(!(await page.locator(`${PANEL} button.reset`).isVisible()), 'HEALTHY_OFFERS_RESET');
+      step('running the tool again later says healthy');
     } else {
       throw new Error(`unknown scenario ${scenario}`);
     }

@@ -13,7 +13,10 @@ node tests/live/drive.mjs account console
 node tests/live/drive.mjs reset bookmarklet
 node tests/live/drive.mjs reset-race bookmarklet
 node tests/live/drive.mjs recover bookmarklet
+node tests/live/drive.mjs recover-account-hint bookmarklet
 node tests/live/drive.mjs opfs-db bookmarklet
+node tests/live/drive.mjs aged-restore bookmarklet
+node tests/live/drive.mjs aged-reset console
 LOCAL_CONSOLE=1 node tests/live/drive.mjs reset loader
 if [ "${SKIP_HOSTED_SITE:-0}" != "1" ]; then
   BASE_URL=https://risuai.xyz/ LOCAL_CONSOLE=1 node tests/live/drive.mjs reset loader
