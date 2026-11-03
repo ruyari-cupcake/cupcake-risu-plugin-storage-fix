@@ -53,6 +53,9 @@ Needs Playwright with Chromium: `PLAYWRIGHT_MODULE=/path/to/node_modules/playwri
      untouched). Since 0.1.1 the tool never gives up on its own, so a heavy run must end ✅; heavy runs also
      record a 1 s `timeline` of the newest backup number and the pointer. Run memory-capped, e.g.
      `systemd-run --user --scope -p MemoryMax=12G -p MemorySwapMax=0 node tests/live/drive.mjs reset-race bookmarklet`.
-3. `bash tests/live/run-all.sh` runs build, unit, mutation and every scenario above.
+3. `bash tests/live/run-all.sh` runs build, unit, mutation and every scenario above. It freezes the tree
+   after the build (`venue-guard.sh`): an edit to `src/`, `dist/`, `tests/` or `scripts/` during the run
+   stops the gate with `VENUE_CHANGED_MID_RUN`, so one "every step passed" never mixes two versions.
+   Edit nothing in this checkout while it runs.
 4. After a release push, run the loader once without `LOCAL_CONSOLE` (it then loads the live
    GitHub Pages bundle): `BASE_URL=https://risuai.xyz/ node tests/live/drive.mjs reset loader`.
