@@ -28,8 +28,10 @@ const HOSTED_CONSOLE_URL = 'https://ruyari-cupcake.github.io/cupcake-risu-plugin
 const PANEL = '#cupcake-risu-plugin-storage-fix';
 const PROBE_NAME = 'RPF_StorageProbe';
 const INDEX_ERROR = 'Failed to load plugin storage index';
-const BOOT_TIMEOUT_MS = 150000;
-const STEP_TIMEOUT_MS = 60000;
+// A heavy database (RPF_BULK_MB, below) makes every boot and host save slower; only the driver's waits stretch.
+const HEAVY_RUN = Number(process.env.RPF_BULK_MB || 0) > 0;
+const BOOT_TIMEOUT_MS = HEAVY_RUN ? 600000 : 150000;
+const STEP_TIMEOUT_MS = HEAVY_RUN ? 300000 : 60000;
 const FLUSH_SETTLE_MS = 2500;
 // Aged scenarios move the host clock past stock's trash grace periods (pluginStorageStore.ts L55-58:
 // indexTrashGrace 1 h for old indexes, trashGrace 24 h for large values).
@@ -41,7 +43,17 @@ const PAST_LARGE_GRACE_MS = 25 * HOUR_MS;
 const NAVIGATION_TIMEOUT_MS = 120000;
 
 const [scenario = 'reset', form = 'bookmarklet'] = process.argv.slice(2);
-const record = { scenario, form, base: null, steps: [], ok: false };
+// Heavy-user measurement (reset / opfs-db / reset-race only): RPF_BULK_MB adds that many MB of chat text
+// to the database before the break, so the saves the tool waits for are full-size. Waits that cover a
+// full-size host save or boot scale up; the tool's own 60 s receipt limit does not.
+const BULK_MB = Number(process.env.RPF_BULK_MB || 0);
+const BULK_MESSAGE_CHARS = 100000;
+const BULK_MESSAGES_PER_CHARACTER = 100;
+const BULK_WAIT_MS = 600000;
+// Slow-device estimate: RPF_CPU_THROTTLE=N slows the host page's CPU N× (Chrome DevTools emulation; 4 ≈ mid-tier and
+// 6 ≈ low-end phone in Lighthouse terms). Storage I/O is not throttled, so a throttled time is still a lower bound.
+const CPU_THROTTLE = Number(process.env.RPF_CPU_THROTTLE || 0);
+const record = { scenario, form, base: null, steps: [], ok: false, bulkMb: BULK_MB || undefined, cpuThrottle: CPU_THROTTLE || undefined };
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function step(name, data = {}) {
@@ -363,6 +375,62 @@ async function seed(page, entries) {
   await until('POINTER_NOT_WRITTEN', async () => typeof (await pointer(page)) === 'string');
 }
 
+// Saved database.bin size in bytes at whichever location exists (the driver's own read; the tool never sizes it).
+async function savedDatabaseBytes(page) {
+  return page.evaluate(async () => {
+    const key = 'database/database.bin';
+    const hex = Array.from(new TextEncoder().encode(key), (b) => b.toString(16).padStart(2, '0')).join('');
+    try { return (await (await (await navigator.storage.getDirectory()).getFileHandle(hex)).getFile()).size; } catch (error) {}
+    if (!(await indexedDB.databases()).some((db) => db.name === 'risuai')) return 0;
+    return new Promise((resolve) => {
+      const open = indexedDB.open('risuai');
+      open.onsuccess = () => {
+        const db = open.result;
+        const request = db.transaction('keyvaluepairs').objectStore('keyvaluepairs').get(key);
+        request.onsuccess = () => { db.close(); const v = request.result; resolve(v ? (v.byteLength ?? v.size ?? 0) : 0); };
+        request.onerror = () => { db.close(); resolve(0); };
+      };
+      open.onerror = () => resolve(0);
+    });
+  });
+}
+
+// Heavy-user database: characters shaped like stock createBlankChar (characters.ts L667-719) whose one chat
+// holds long messages. New chaIds are encoded on the next save (risuSave.ts L235); a plugin write starts it.
+async function injectBulk(page, mb) {
+  const characters = Math.ceil((mb * 1000000) / (BULK_MESSAGE_CHARS * BULK_MESSAGES_PER_CHARACTER));
+  const started = Date.now();
+  await page.evaluate(({ characters, perCharacter, chars }) => {
+    const db = window.__pluginApis__.getDatabase();
+    const filler = 'lorem ipsum dolor sit amet '.repeat(Math.ceil(chars / 27)).slice(0, chars - 16);
+    for (let c = 0; c < characters; c++) {
+      const message = [];
+      for (let m = 0; m < perCharacter; m++) {
+        message.push({ role: m % 2 ? 'char' : 'user', data: `${String(c).padStart(5, '0')}-${String(m).padStart(5, '0')} ${filler}`, time: Date.now() });
+      }
+      db.characters.push({
+        name: `Bulk ${c}`, firstMessage: '', desc: '', notes: '',
+        chats: [{ message, note: '', name: 'Chat 1', localLore: [] }],
+        chatFolders: [], chatPage: 0, emotionImages: [], bias: [], viewScreen: 'none', globalLore: [],
+        chaId: `rpf-bulk-${c}`, type: 'character', sdData: [], utilityBot: false, customscript: [], exampleMessage: '',
+        creatorNotes: '', systemPrompt: '', postHistoryInstructions: '', alternateGreetings: [], tags: [], creator: '',
+        characterVersion: '', personality: '', scenario: '', firstMsgIndex: -1, replaceGlobalNote: '',
+        triggerscript: [], additionalText: '',
+      });
+    }
+  }, { characters, perCharacter: BULK_MESSAGES_PER_CHARACTER, chars: BULK_MESSAGE_CHARS });
+  const trigger = await store(page, 'set', 'bulkSaveTrigger', Date.now());
+  gate(trigger.ok, 'BULK_TRIGGER_WRITE_FAILED', trigger);
+  const target = mb * 1000000 * 0.95;
+  let bytes = 0;
+  await until('BULK_NOT_SAVED', async () => {
+    bytes = await savedDatabaseBytes(page);
+    if (bytes < target) await sleep(2000);
+    return bytes >= target;
+  }, BULK_WAIT_MS);
+  step('heavy database saved', { characters, savedMb: Math.round(bytes / 1e5) / 10, ms: Date.now() - started });
+}
+
 async function expectDead(page) {
   const read = await store(page, 'get', 'alpha');
   gate(!read.ok && read.error.includes(INDEX_ERROR), 'NOT_DEAD_AFTER_BREAK', read);
@@ -415,6 +483,10 @@ async function main() {
       (dialog.type() === 'beforeunload' ? dialog.accept() : dialog.dismiss()).catch(() => {});
     });
     page.on('pageerror', (error) => { (record.pageErrors ||= []).push(String(error?.message || error).slice(0, 200)); });
+    if (CPU_THROTTLE > 1) {
+      const cdp = await context.newCDPSession(page);
+      await cdp.send('Emulation.setCPUThrottlingRate', { rate: CPU_THROTTLE });
+    }
 
     await boot(page, base);
     step('host booted', { version: await page.evaluate(() => document.title) });
@@ -460,21 +532,26 @@ async function main() {
       step('host database location', location);
       gate(location.opfs !== location.idb, 'DATABASE_LOCATION_AMBIGUOUS', location);
       gate(location.opfs === (scenario === 'opfs-db'), 'DATABASE_LOCATION_NOT_EXERCISED', location);
+      if (BULK_MB) await injectBulk(page, BULK_MB);
       await page.evaluate(() => { window.__pluginApis__.getDatabase().pluginCustomStorage.rpfLegacyInline = 'keep-me'; });
       await waitHostSaved(page);
       const dead = await pointer(page);
       const deleted = await coldFiles(page, 'delete');
       step('cold files deleted (OPFS eviction)', { pointer: dead, count: deleted.length });
+      const reloadStarted = Date.now();
       await reload(page);
+      if (BULK_MB) step('host rebooted with the heavy database', { ms: Date.now() - reloadStarted, savedMb: Math.round((await savedDatabaseBytes(page)) / 1e5) / 10 });
       await expectDead(page);
+      const toolStarted = Date.now();
       await runTool(page);
       const text = await panelStatus(page, /목차 파일이 이 브라우저에 없어요/);
-      step('tool diagnoses missing index', { text: text.split('\n')[0] });
+      step('tool diagnoses missing index', { text: text.split('\n')[0], ms: Date.now() - toolStarted });
       gate(await page.locator(`${PANEL} .detail`).innerText().then((t) => t.includes('찾지 못했어요')), 'EXPECTED_NO_CANDIDATES');
       gate(!(await page.locator(`${PANEL} button.recover`).isVisible()), 'RECOVER_OFFERED_WITHOUT_CANDIDATES');
       await page.locator(`${PANEL} button.reset`).click();
       gate(await page.locator(`${PANEL} button.do-reset`).isDisabled(), 'RESET_NOT_GUARDED_BY_CHECKBOX');
       await page.locator(`${PANEL} input.agree`).check();
+      const resetClickedAt = Date.now();
       await page.locator(`${PANEL} button.do-reset`).click();
       if (race) {
         // Write only once the live pointer is gone (before that the store still rejects), and
@@ -485,8 +562,28 @@ async function main() {
         step('plugin wrote while the tool was confirming');
       }
       const done = await panelStatus(page, /✅|⚠|❌/);
-      gate(done.startsWith('✅'), 'RESET_NOT_CONFIRMED', { done });
-      step('reset confirmed by tool', { text: done.split('\n')[0] });
+      const confirmMs = Date.now() - resetClickedAt;
+      record.confirmMs = confirmMs;
+      if (BULK_MB && done.startsWith('⚠') && done.includes('1분 안에 확인하지 못했어요')) {
+        // Measurement only: follow the panel's own advice (wait ~30 s, reload, run the tool again) and record
+        // whether the user ends healthy. The change was made; only its receipt timed out.
+        step('receipt timed out on the heavy database', { text: done.split('\n')[0], confirmMs });
+        record.receiptTimedOut = true;
+        await sleep(30000);
+        await reloadFromPanel(page);
+        await runTool(page);
+        const again = await panelStatus(page, /정상이에요|❌|⚠/);
+        step('tool re-run after following the advice', { text: again.split('\n')[0] });
+        gate(again.includes('정상이에요'), 'NOT_HEALTHY_AFTER_FOLLOWING_ADVICE', { again });
+        if (race) {
+          const raced = await store(page, 'get', 'raced');
+          gate(raced.ok && raced.value === 'during-confirmation', 'RACED_VALUE_LOST_AFTER_TIMEOUT', raced);
+        }
+        record.ok = true;
+        return;
+      }
+      gate(done.startsWith('✅'), 'RESET_NOT_CONFIRMED', { done, confirmMs });
+      step('reset confirmed by tool', { text: done.split('\n')[0], confirmMs });
       const memoryPointer = await pointer(page);
       gate(race ? memoryPointer !== dead : memoryPointer === null, 'POINTER_STILL_SET_IN_MEMORY', { memoryPointer });
       await reloadFromPanel(page);

@@ -42,6 +42,12 @@ Needs Playwright with Chromium: `PLAYWRIGHT_MODULE=/path/to/node_modules/playwri
    - `LOCAL_CONSOLE=1 … reset loader` serves the hosted `console.js` URL from this checkout;
      `BASE_URL=https://risuai.xyz/` runs on the official site instead of `STOCK_DIR` (its CSP has
      to allow the loader's script; it also asks "leave site?" on reload, which the driver accepts).
+   - Heavy-database measurement (not in `run-all.sh`): `RPF_BULK_MB=500` on `reset` / `opfs-db` / `reset-race`
+     adds that many MB of chat text (stock-shaped characters) before the break and records `confirmMs`
+     (reset click → ✅/⚠); `RPF_CPU_THROTTLE=6` slows the host page's CPU (DevTools emulation, storage I/O
+     untouched). A ⚠ receipt timeout is followed the way the panel advises (30 s, reload, re-run → "정상")
+     and recorded as `receiptTimedOut`. Run memory-capped, e.g.
+     `systemd-run --user --scope -p MemoryMax=12G -p MemorySwapMax=0 node tests/live/drive.mjs reset-race bookmarklet`.
 3. `bash tests/live/run-all.sh` runs build, unit, mutation and every scenario above.
 4. After a release push, run the loader once without `LOCAL_CONSOLE` (it then loads the live
    GitHub Pages bundle): `BASE_URL=https://risuai.xyz/ node tests/live/drive.mjs reset loader`.
