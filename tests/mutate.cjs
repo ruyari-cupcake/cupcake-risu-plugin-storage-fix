@@ -8,8 +8,7 @@ const { spawnSync } = require('node:child_process');
 const ROOT = path.join(__dirname, '..');
 const MUTANT_TIMEOUT_MS = 30000;
 const OBSOLETE_SAVE_TIMEOUT_MS = 60000;
-const source = fs.readFileSync(path.join(ROOT, 'src/core.js'), 'utf8');
-const MUTANTS = [
+const CORE_MUTANTS = [
   ['allow account backend', "if (env.localStorage.getItem('accountst') === 'able') return 'account';", ''],
   ['allow node backend', "if (env.isNode) return 'node';", ''],
   ['allow Tauri backend', "if (env.isTauri) return 'tauri';", ''],
@@ -76,20 +75,34 @@ const MUTANTS = [
   ['onWaiting error propagates', '} catch (error) {}', '} catch (error) { throw error; }'],
   ['onWaiting not called', 'if (onWaiting) onWaiting({ waitedMs: now - (editedAt ?? started), sinceSaveMs: now - lastSaveSeenAt, saves });', ''],
 ];
+/* The waiting line is the user's only view of a receipt that never gives up on its own (0.1.1). */
+const UI_MUTANTS = [
+  ['stall measured on waited time', 'const text = sinceSaveMs >= RPF_SAVE_STALL_HINT_MS', 'const text = waitedMs >= RPF_SAVE_STALL_HINT_MS'],
+  ['stall hint never shown', 'const text = sinceSaveMs >= RPF_SAVE_STALL_HINT_MS', 'const text = false'],
+  ['waiting line renders after close', 'if (isAborted() || waitedMs < RPF_SLOW_SAVE_NOTICE_MS) return;', 'if (waitedMs < RPF_SLOW_SAVE_NOTICE_MS) return;'],
+  ['waiting line re-renders every poll', 'if (text !== shownText) {', 'if (true) {'],
+  ['waiting line from the first poll', 'if (isAborted() || waitedMs < RPF_SLOW_SAVE_NOTICE_MS) return;', 'if (isAborted()) return;'],
+];
+const SUITES = [
+  { file: 'src/core.js', test: 'tests/core.test.cjs', mutants: CORE_MUTANTS },
+  { file: 'src/ui.js', test: 'tests/ui.test.cjs', mutants: UI_MUTANTS },
+];
+const MUTANTS = SUITES.flatMap((suite) => suite.mutants.map((mutant) => [suite, ...mutant]));
 
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'rpsf-mutants-'));
 let survivors = 0;
 try {
-  for (const [label, from, to] of MUTANTS) {
-    if (source.split(from).length !== 2) throw new Error(`mutant "${label}" must match src/core.js exactly once`);
+  for (const [suite, label, from, to] of MUTANTS) {
+    const source = fs.readFileSync(path.join(ROOT, suite.file), 'utf8');
+    if (source.split(from).length !== 2) throw new Error(`mutant "${label}" must match ${suite.file} exactly once`);
     const mutated = source.replace(from, to);
     new vm.Script(mutated, { filename: label });
     const dir = path.join(work, label.replace(/\W+/g, '-'));
     fs.mkdirSync(path.join(dir, 'src'), { recursive: true });
     fs.mkdirSync(path.join(dir, 'tests'), { recursive: true });
-    fs.writeFileSync(path.join(dir, 'src/core.js'), mutated);
-    fs.copyFileSync(path.join(ROOT, 'tests/core.test.cjs'), path.join(dir, 'tests/core.test.cjs'));
-    const run = spawnSync(process.execPath, ['--test', '--test-reporter=spec', path.join(dir, 'tests/core.test.cjs')], {
+    fs.writeFileSync(path.join(dir, suite.file), mutated);
+    fs.copyFileSync(path.join(ROOT, suite.test), path.join(dir, suite.test));
+    const run = spawnSync(process.execPath, ['--test', '--test-reporter=spec', path.join(dir, suite.test)], {
       encoding: 'utf8', timeout: MUTANT_TIMEOUT_MS, env: { ...process.env, FORCE_COLOR: '0' },
     });
     if (run.error || run.signal || ![0, 1].includes(run.status)) {

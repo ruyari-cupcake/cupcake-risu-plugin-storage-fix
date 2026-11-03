@@ -749,12 +749,12 @@ async function main() {
       const waiting = await panelStatus(page, /⏳|✅|⚠|❌ (?!플러그인 저장소 목차)/, 60000);
       gate(waiting.startsWith('⏳'), 'NO_STILL_WAITING_LINE', { waiting });
       step('panel shows it is still waiting for the host', { text: waiting.split('\n')[0], ms: Date.now() - clickedAt });
-      const hint = await panelStatus(page, /새로 저장하지 않았어요|✅|⚠|❌ (?!플러그인 저장소 목차)/, 150000);
+      const hint = await panelStatus(page, /현재 탭이 비활성화되었습니다|✅|⚠|❌ (?!플러그인 저장소 목차)/, 150000);
       const elapsedMs = Date.now() - clickedAt;
-      gate(hint.startsWith('⏳') && hint.includes('새로 저장하지 않았어요'), 'NO_STALL_HINT', { hint, elapsedMs });
+      gate(hint.startsWith('⏳') && hint.includes('그대로 두는 게 좋아요'), 'NO_STALL_HINT', { hint, elapsedMs });
       gate(elapsedMs >= 60000, 'STALL_HINT_BEFORE_A_MINUTE', { elapsedMs });
-      gate(await page.locator(`${PANEL} button.reload`).isVisible(), 'STALL_HINT_HIDES_RELOAD');
-      step('after a minute without a save the panel says what to check and offers the reload', { text: hint.split('\n')[0], elapsedMs });
+      gate(!(await page.locator(`${PANEL} button.reload`).isVisible()), 'RELOAD_OFFERED_MID_WAIT');
+      step('after a minute without a save the panel names the other-tab case, no reload button', { text: hint.split('\n')[0], elapsedMs });
       // It keeps waiting: no outcome appears on its own.
       await sleep(15000);
       const still = await page.locator(`${PANEL} .status`).innerText();
@@ -763,7 +763,15 @@ async function main() {
       const disk = await savedVsLive(page);
       gate(disk.saved !== null && disk.saved.includes(dead), 'HOST_SAVED_DESPITE_OTHER_TAB', { saved: disk.saved?.slice(0, 120) });
       step('still waiting 15 s later; the saved file still holds the dead pointer', { text: still.split('\n')[0] });
-      await reloadFromPanel(page);
+      // The user answers stock's own "현재 탭이 비활성화되었습니다" alert, whose OK reloads the page (globalApi.svelte.ts L308-310).
+      const stockOk = page.getByRole('button', { name: 'OK', exact: true }).filter({ visible: true });
+      gate(await stockOk.count() >= 1, 'STOCK_OTHER_TAB_ALERT_MISSING');
+      const navigation = page.waitForNavigation({ timeout: NAVIGATION_TIMEOUT_MS });
+      await stockOk.first().click();
+      await navigation;
+      await boot(page, null);
+      await installProbeIfMissing(page);
+      step('answered stock\'s other-tab alert; the page reloaded');
       await expectDead(page);
       await runTool(page);
       await panelStatus(page, /목차 파일이 이 브라우저에 없어요/);

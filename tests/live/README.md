@@ -34,9 +34,9 @@ Needs Playwright with Chromium: `PLAYWRIGHT_MODULE=/path/to/node_modules/playwri
      nothing and offers the reload; after it the normal reset confirms.
    - `receipt-stuck` — the same channel message right before the reset is confirmed, so the host
      never saves the edit: the panel shows its ⏳ still-waiting line, after a minute without a new
-     save it says what to check and shows the reload button but keeps waiting (no ⚠ on its own), the
-     saved file still holds the dead pointer, and the advised reload + re-run repairs normally with
-     the other values kept.
+     save it names stock's "현재 탭이 비활성화되었습니다" alert but keeps waiting (no ⚠ on its own, no
+     panel reload button), the saved file still holds the dead pointer, and stock's alert OK (a reload)
+     + re-run repairs normally with the other values kept.
    - `aged-restore` / `aged-reset` — the host page's clock is moved ahead (init script, stock code
      untouched) past stock's trash grace (old indexes 1 h, large values 24 h): stock itself deletes
      the old index, an older database comes back (real dead state) → recover; or the cold files

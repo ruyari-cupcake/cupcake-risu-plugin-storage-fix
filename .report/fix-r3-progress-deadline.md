@@ -18,8 +18,11 @@ same defect with a bigger constant.
    not kept as a fallback. Sleep is `SAVE_POLL_INTERVAL_MS`.
 2. Keep `onWaiting({ waitedMs, sinceSaveMs, saves })` exactly as R31 item 5 (once per poll before the sleep, errors swallowed,
    `sinceSaveMs` restarts at each NEWER backup, never on a live-pointer change). The UI (`src/ui.js`, already updated by the
-   orchestrator) shows the waited time after 10 s and, once `sinceSaveMs` ≥ 60 s, what to check plus the reload button, while the
-   wait continues.
+   orchestrator) shows the waited time after 10 s and, once `sinceSaveMs` ≥ 60 s, what to check, while the wait continues.
+   **Review round 3 amendment:** the first UI also showed a reload button from 60 s on; agy (MEDIUM) and Sol showed it tempts a reload
+   during a still-running save, which throws that save away. Shipped UI (`rpfWaitingDisplay`, `tests/ui.test.cjs`, 5 UI mutants in
+   `tests/mutate.cjs`): no reload button while waiting; the 60 s line names both readings — a big save still running (leave it) and
+   stock's own other-tab alert "현재 탭이 비활성화되었습니다" (its OK reloads; then re-run the tool).
 3. R16 item 4 stays reversed (continuous movement → keeps waiting, ends by abort).
 
 **Tests:** every `SAVE_UNCONFIRMED` expectation becomes "never resolves, never throws on its own; abort → `CANCELLED`; the edit was

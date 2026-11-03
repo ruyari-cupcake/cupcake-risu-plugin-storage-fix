@@ -4,7 +4,9 @@
 
 - The save check never gives up on its own (a big database on a slow device used to get a false warning after
   a fixed minute): the panel shows how long it has been waiting, and after a minute without a new RisuAI save
-  it says what to check and offers the reload while it keeps waiting.
+  it adds the two readings — a big save file is still being written (leave it), or RisuAI showed its own
+  "현재 탭이 비활성화되었습니다" alert because another tab took the saving (press that alert's OK, then run the tool
+  again). It keeps waiting and offers no reload of its own meanwhile, since reloading mid-save throws the save away.
 
 ## 0.1.0 — 2026-11-03
 
