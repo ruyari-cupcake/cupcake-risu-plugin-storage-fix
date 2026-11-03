@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.1 — 2026-11-03
+
+- The save check never gives up on its own (a big database on a slow device used to get a false warning after
+  a fixed minute): the panel shows how long it has been waiting, and after a minute without a new RisuAI save
+  it says what to check and offers the reload while it keeps waiting.
+
 ## 0.1.0 — 2026-11-03
 
 - First version, published as **컵케익 리스 플러그인 저장소 고치기** (`cupcake-risu-plugin-storage-fix`) under the

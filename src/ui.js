@@ -6,6 +6,10 @@
 const RPF_VERSION = '__RPF_VERSION__';
 const RPF_PANEL_ID = 'cupcake-risu-plugin-storage-fix';
 const RPF_PROGRESS_INTERVAL_MS = 200;
+/* A save receipt longer than this gets a visible "still waiting" line (typical receipts take a few seconds). */
+const RPF_SLOW_SAVE_NOTICE_MS = 10000;
+/* After this long without a new host save the waiting line adds what to check and offers the reload. */
+const RPF_SAVE_STALL_HINT_MS = 60000;
 
 const RPF_STYLE = `
   :host { all: initial; }
@@ -350,12 +354,37 @@ function openFixPanel() {
     running = run;
     showButtons([]);
     closeConfirm();
-    setStatus('바꾸는 중… 리스가 저장을 마칠 때까지 기다리고 있어요 (보통 몇 초, 최대 1분). 창을 닫지 마세요.');
+    setStatus('바꾸는 중… 리스가 저장을 마칠 때까지 기다려요 (보통 몇 초). 창을 닫지 마세요.');
+    // The tool never gives up on its own: RisuAI gives no "still saving" signal, and one save can take
+    // minutes (a big database on a slow device, or a full re-encode after legacy values migrate). The
+    // panel says how long it has waited; after a minute without a new save it also says what to check
+    // and offers the reload, while the wait goes on. No ✅/⚠/❌ here: those mark the outcome.
+    let shownText = '';
+    let stallShown = false;
+    const onWaiting = ({ waitedMs, sinceSaveMs }) => {
+      if (run.signal.aborted || waitedMs < RPF_SLOW_SAVE_NOTICE_MS) return;
+      const stalled = sinceSaveMs >= RPF_SAVE_STALL_HINT_MS;
+      const text = stalled
+        ? `⏳ 리스가 ${Math.floor(sinceSaveMs / 1000)}초째 새로 저장하지 않았어요 (기다린 시간 ${Math.floor(waitedMs / 1000)}초).\n`
+          + '큰 저장 파일을 쓰는 중이라면 그대로 두세요 — 저장이 끝나는 대로 완료 표시가 떠요.\n'
+          + '다른 리스 탭이 열려 있다면 그 탭을 닫고 "지금 새로고침"을 누른 뒤, 이 도구를 다시 실행해서 "정상"인지 확인해 주세요 '
+          + '(아직 저장되지 않았다면 고장으로 나오니 한 번 더 고치면 돼요).'
+        : `⏳ 리스 저장을 기다리는 중이에요 (${Math.floor(waitedMs / 1000)}초). 데이터베이스가 크거나 기기가 느리면 1분 넘게 걸릴 수 있어요.\n`
+          + '리스가 저장을 마칠 때까지 기다릴게요. 그만 기다리려면 닫기(×)를 누르세요 — 바꾼 표시는 그대로예요.';
+      if (text !== shownText) {
+        shownText = text;
+        setStatus(text);
+      }
+      if (stalled !== stallShown) {
+        stallShown = stalled;
+        showButtons(stalled ? [reloadButton] : []);
+      }
+    };
     try {
       if (action === 'recover') {
-        await RisuPluginStorageFix.recover(env, { pointer: diagnosis.pointer, candidateId, signal: run.signal });
+        await RisuPluginStorageFix.recover(env, { pointer: diagnosis.pointer, candidateId, signal: run.signal, onWaiting });
       } else {
-        await RisuPluginStorageFix.reset(env, { pointer: diagnosis.pointer, signal: run.signal });
+        await RisuPluginStorageFix.reset(env, { pointer: diagnosis.pointer, signal: run.signal, onWaiting });
       }
       if (run.signal.aborted) return;
       detail.textContent = '';
@@ -368,11 +397,6 @@ function openFixPanel() {
       showButtons([reloadButton]);
     } catch (error) {
       if (run.signal.aborted) return;
-      if (error instanceof RisuPluginStorageFix.FixError && error.code === 'SAVE_UNCONFIRMED') {
-        setStatus(`⚠ ${error.message}\n30초쯤 더 기다렸다가 새로고침한 뒤, 이 도구를 다시 실행해서 "정상"으로 나오는지 확인해 주세요. 그래도 고장으로 나오면 한 번 더 고치면 돼요.`, 'error');
-        showButtons([reloadButton, rerunButton]);
-        return;
-      }
       if (error instanceof RisuPluginStorageFix.FixError && (error.code === 'NOT_SETTLED' || error.code === 'UNCERTAIN')) {
         setStatus(`⚠ ${error.message}\n"지금 새로고침"을 누른 뒤 이 도구를 다시 실행해 주세요. "다시 확인"만 누르면 같은 상태로 다시 확인하게 돼요.`, 'error');
         showButtons([reloadButton, rerunButton]);

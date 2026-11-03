@@ -60,7 +60,7 @@ the bookmarklet must parse with every newline removed).
   now(), sleep(ms) }`. Tests pass their own fake env with the same shape.
 - `FixError` (code + Korean message), codes at least: `NOT_RISU`, `NOT_READY`, `UNSUPPORTED_BACKEND`,
   `NOT_BROKEN`, `CHANGED` (live pointer differs from the diagnosed one), `CANDIDATE_INVALID`,
-  `SAVE_UNCONFIRMED`, `CANCELLED`.
+  `CANCELLED` (0.1.1 removed `SAVE_UNCONFIRMED`: the receipt never gives up on its own, R32).
 - `async diagnose(env, {signal, onProgress})` → one of
   - `{ state: 'not-risu' }` — no `__pluginApis__`/`getDatabase`;
   - `{ state: 'not-ready' }` — `getDatabase().pluginCustomStorage` missing/not an object;
@@ -76,12 +76,12 @@ the bookmarklet must parse with every newline removed).
   to stay cheap on big chat items, stream-gunzip and read only until the prefix decides: keep a file
   only if its JSON starts with `{"type":"risu-plugin-storage-index"`, then fully parse and require
   `isPluginStorageIndex`. Unreadable files are skipped, never thrown. Report progress `(done, total)`.
-- `async recover(env, {pointer, candidateId, signal, timeoutMs})` — re-checks: backend web, live
+- `async recover(env, {pointer, candidateId, signal, onWaiting})` — re-checks: backend web, live
   pointer still `=== pointer` (else `CHANGED`), live pointer still broken (else `NOT_BROKEN`),
   candidate re-read and valid (else `CANDIDATE_INVALID`); then sets
   `pluginCustomStorage._coldpluginIndex = candidateId` and returns `await waitForPersisted(...)` for
   pointer `=== candidateId`.
-- `async reset(env, {pointer, signal, timeoutMs})` — same re-checks (no candidate); then
+- `async reset(env, {pointer, signal, onWaiting})` — same re-checks (no candidate); then
   `delete pluginCustomStorage._coldpluginIndex` and waits for the persisted pointer to be absent.
   Touches NOTHING else: other `pluginCustomStorage` keys (legacy inline values, `_coldplugin` map),
   cold storage files, safeLocalStorage, IndexedDB plugin stores all stay as they are.
@@ -89,11 +89,14 @@ the bookmarklet must parse with every newline removed).
   `{ format: 'unknown' }` (no DB / not `RISUSAVE\0`). Reads the database from the location rule in
   fact 4. On OPFS read lazily through `File.slice` (headers only, plus the pluginStorage block); on
   IndexedDB the value is already a Uint8Array.
-- `async waitForPersisted(env, predicate, {signal, timeoutMs = DEFAULT_SAVE_TIMEOUT_MS})` — cheap gate
+- `async waitForPersisted(env, predicate, {signal, onWaiting})` — cheap gate
   first: list database keys (`forage.keys()` or OPFS hex names) and only re-read the database when a
   `database/dbbackup-<n>.bin` newer than the last one seen appears (plus one initial read); resolve
-  `{ confirmed: true }` when `predicate(pointer)` holds on the persisted file; on timeout throw
-  `SAVE_UNCONFIRMED`. Honour `signal` (`CANCELLED`). Tunables are named constants.
+  `{ confirmed: true }` when `predicate(pointer)` holds on the persisted file (and the R16 settle rule,
+  `fix-r2-settle.md`). Never gives up on its own (0.1.1, R32 `fix-r3-progress-deadline.md`: one stock save
+  can take minutes and RisuAI exposes no saving signal); ends only on `signal` (`CANCELLED`). `onWaiting`
+  gets `{waitedMs, sinceSaveMs, saves}` each poll (`sinceSaveMs` restarts on a newer backup); its errors are
+  swallowed. Tunables are named constants.
 
 ## Outcome contract
 
@@ -120,6 +123,6 @@ merely contains the index type string later, corrupt gzip, the dead pointer itse
 large count); recover/reset re-check refusals (`CHANGED`, `NOT_BROKEN`, `CANDIDATE_INVALID`);
 reset leaves every other key untouched; persisted-pointer parsing on both locations incl. a
 compressed block, other blocks before it, and a non-RISUSAVE file; wait gating (no re-read without a
-new dbbackup key; a stale in-flight save that still has the old pointer does NOT confirm; timeout →
-`SAVE_UNCONFIRMED`; abort → `CANCELLED`). `tests/mutate.cjs` (same style as
+new dbbackup key; a stale in-flight save that still has the old pointer does NOT confirm; no save → keeps
+waiting (0.1.1, R32); abort → `CANCELLED`). `tests/mutate.cjs` (same style as
 `cupcake-webrisu-backup-unlock/tests/mutate.cjs`): at least 8 plausible-bug mutants, every one KILLED.

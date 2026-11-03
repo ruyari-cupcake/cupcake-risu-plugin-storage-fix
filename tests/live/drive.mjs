@@ -4,7 +4,8 @@
 //     node tests/live/drive.mjs <scenario> [form]
 //
 // scenario: venue (harness sanity, no tool) | healthy | reset | reset-race | recover | recover-account-hint
-//           | not-settled | opfs-db | account | aged-restore | aged-reset (aged = host clock moved past stock trash grace)
+//           | not-settled | receipt-stuck | opfs-db | account | aged-restore | aged-reset
+//           (aged = host clock moved past stock trash grace; receipt-stuck = host stops saving during the receipt)
 // form:     bookmarklet (default) | console | loader   (loader + LOCAL_CONSOLE=1 serves the hosted
 //           console URL from this checkout, so it can run before a release)
 // BASE_URL=https://risuai.xyz/ runs against that origin instead of serving STOCK_DIR.
@@ -312,12 +313,13 @@ async function runTool(page) {
   await until('PANEL_MISSING', () => page.locator(PANEL).count().then((n) => n === 1));
 }
 
-async function panelStatus(page, pattern) {
+// A heavy run's receipt can take minutes (the tool keeps waiting while the host keeps saving).
+async function panelStatus(page, pattern, ms = HEAVY_RUN ? STEP_TIMEOUT_MS : 90000) {
   let text = '';
   await until(`PANEL_STATUS_${pattern}`, async () => {
     text = await page.locator(`${PANEL} .status`).innerText();
     return pattern.test(text);
-  }, 90000);
+  }, ms);
   return text;
 }
 
@@ -551,6 +553,33 @@ async function main() {
       await page.locator(`${PANEL} button.reset`).click();
       gate(await page.locator(`${PANEL} button.do-reset`).isDisabled(), 'RESET_NOT_GUARDED_BY_CHECKBOX');
       await page.locator(`${PANEL} input.agree`).check();
+      if (HEAVY_RUN) {
+        // Diagnostic timeline for heavy runs: once a second, the newest dbbackup number (IndexedDB key list only,
+        // no values) and whether the pointer is set, so a receipt timeout can be traced to host save spacing.
+        await page.evaluate(() => {
+          window.__rpfTimeline = [];
+          const started = Date.now();
+          window.__rpfTimer = setInterval(() => {
+            const open = indexedDB.open('risuai');
+            open.onsuccess = () => {
+              const db = open.result;
+              const request = db.transaction('keyvaluepairs').objectStore('keyvaluepairs').getAllKeys();
+              request.onsuccess = () => {
+                let newest = -1;
+                for (const key of request.result) {
+                  const match = /^database\/dbbackup-(\d+)\.bin$/.exec(String(key));
+                  if (match) newest = Math.max(newest, Number(match[1]));
+                }
+                db.close();
+                const pointerSet = typeof window.__pluginApis__.getDatabase().pluginCustomStorage._coldpluginIndex === 'string';
+                const status = document.querySelector('#cupcake-risu-plugin-storage-fix .status')?.textContent?.slice(0, 12) || '';
+                window.__rpfTimeline.push({ t: Date.now() - started, newest, pointerSet, status });
+              };
+              request.onerror = () => db.close();
+            };
+          }, 1000);
+        });
+      }
       const resetClickedAt = Date.now();
       await page.locator(`${PANEL} button.do-reset`).click();
       if (race) {
@@ -564,23 +593,8 @@ async function main() {
       const done = await panelStatus(page, /✅|⚠|❌/);
       const confirmMs = Date.now() - resetClickedAt;
       record.confirmMs = confirmMs;
-      if (BULK_MB && done.startsWith('⚠') && done.includes('1분 안에 확인하지 못했어요')) {
-        // Measurement only: follow the panel's own advice (wait ~30 s, reload, run the tool again) and record
-        // whether the user ends healthy. The change was made; only its receipt timed out.
-        step('receipt timed out on the heavy database', { text: done.split('\n')[0], confirmMs });
-        record.receiptTimedOut = true;
-        await sleep(30000);
-        await reloadFromPanel(page);
-        await runTool(page);
-        const again = await panelStatus(page, /정상이에요|❌|⚠/);
-        step('tool re-run after following the advice', { text: again.split('\n')[0] });
-        gate(again.includes('정상이에요'), 'NOT_HEALTHY_AFTER_FOLLOWING_ADVICE', { again });
-        if (race) {
-          const raced = await store(page, 'get', 'raced');
-          gate(raced.ok && raced.value === 'during-confirmation', 'RACED_VALUE_LOST_AFTER_TIMEOUT', raced);
-        }
-        record.ok = true;
-        return;
+      if (HEAVY_RUN) {
+        record.timeline = await page.evaluate(() => { clearInterval(window.__rpfTimer); return window.__rpfTimeline; }).catch(() => null);
       }
       gate(done.startsWith('✅'), 'RESET_NOT_CONFIRMED', { done, confirmMs });
       step('reset confirmed by tool', { text: done.split('\n')[0], confirmMs });
@@ -712,6 +726,55 @@ async function main() {
       await reloadFromPanel(page);
       await expectValues(page, { alpha: null }, dead);
       step('after the reload the normal reset confirms and the store works');
+    } else if (scenario === 'receipt-stuck') {
+      // The host stops saving right as the tool edits (another tab announces itself on `risu-db`,
+      // globalApi.svelte.ts L296-312, L438-442), so no newer backup ever comes. The tool never gives up
+      // on its own (0.1.1): after a minute without a new save the waiting line says what to check and
+      // offers the reload while it keeps waiting; nothing changes on disk, and the advised reload +
+      // re-run must repair normally.
+      await seed(page, [['alpha', 1]]);
+      await page.evaluate(() => { window.__pluginApis__.getDatabase().pluginCustomStorage.rpfLegacyInline = 'keep-me'; });
+      await waitHostSaved(page);
+      const dead = await pointer(page);
+      await coldFiles(page, 'delete');
+      await reload(page);
+      await expectDead(page);
+      await runTool(page);
+      await panelStatus(page, /목차 파일이 이 브라우저에 없어요/);
+      await page.locator(`${PANEL} button.reset`).click();
+      await page.locator(`${PANEL} input.agree`).check();
+      await page.evaluate(() => new BroadcastChannel('risu-db').postMessage('rpf-other-tab'));
+      const clickedAt = Date.now();
+      await page.locator(`${PANEL} button.do-reset`).click();
+      const waiting = await panelStatus(page, /⏳|✅|⚠|❌ (?!플러그인 저장소 목차)/, 60000);
+      gate(waiting.startsWith('⏳'), 'NO_STILL_WAITING_LINE', { waiting });
+      step('panel shows it is still waiting for the host', { text: waiting.split('\n')[0], ms: Date.now() - clickedAt });
+      const hint = await panelStatus(page, /새로 저장하지 않았어요|✅|⚠|❌ (?!플러그인 저장소 목차)/, 150000);
+      const elapsedMs = Date.now() - clickedAt;
+      gate(hint.startsWith('⏳') && hint.includes('새로 저장하지 않았어요'), 'NO_STALL_HINT', { hint, elapsedMs });
+      gate(elapsedMs >= 60000, 'STALL_HINT_BEFORE_A_MINUTE', { elapsedMs });
+      gate(await page.locator(`${PANEL} button.reload`).isVisible(), 'STALL_HINT_HIDES_RELOAD');
+      step('after a minute without a save the panel says what to check and offers the reload', { text: hint.split('\n')[0], elapsedMs });
+      // It keeps waiting: no outcome appears on its own.
+      await sleep(15000);
+      const still = await page.locator(`${PANEL} .status`).innerText();
+      gate(still.startsWith('⏳') && !/✅|⚠|❌/.test(still), 'TOOL_GAVE_UP_ON_ITS_OWN', { still: still.slice(0, 80) });
+      gate((await pointer(page)) === null, 'EDIT_NOT_APPLIED_IN_MEMORY', { now: await pointer(page) });
+      const disk = await savedVsLive(page);
+      gate(disk.saved !== null && disk.saved.includes(dead), 'HOST_SAVED_DESPITE_OTHER_TAB', { saved: disk.saved?.slice(0, 120) });
+      step('still waiting 15 s later; the saved file still holds the dead pointer', { text: still.split('\n')[0] });
+      await reloadFromPanel(page);
+      await expectDead(page);
+      await runTool(page);
+      await panelStatus(page, /목차 파일이 이 브라우저에 없어요/);
+      await page.locator(`${PANEL} button.reset`).click();
+      await page.locator(`${PANEL} input.agree`).check();
+      await page.locator(`${PANEL} button.do-reset`).click();
+      const again = await panelStatus(page, /✅|⚠|❌ (?!플러그인 저장소 목차)/);
+      gate(again.startsWith('✅'), 'RESET_NOT_CONFIRMED', { again });
+      await reloadFromPanel(page);
+      await expectValues(page, { alpha: null, rpfLegacyInline: 'keep-me' }, dead);
+      step('advised reload + re-run repaired normally; other values kept');
     } else if (scenario === 'aged-restore') {
       // The natural dead state: an older database (pointing at index A) comes back after stock has
       // already deleted A once its trash grace passed. Nothing is deleted by hand here.

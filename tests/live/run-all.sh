@@ -15,6 +15,7 @@ node tests/live/drive.mjs reset-race bookmarklet
 node tests/live/drive.mjs recover bookmarklet
 node tests/live/drive.mjs recover-account-hint bookmarklet
 node tests/live/drive.mjs not-settled bookmarklet
+node tests/live/drive.mjs receipt-stuck bookmarklet
 node tests/live/drive.mjs opfs-db bookmarklet
 node tests/live/drive.mjs aged-restore bookmarklet
 node tests/live/drive.mjs aged-reset console

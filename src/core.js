@@ -8,9 +8,6 @@ const RisuPluginStorageFix = (() => {
   const INDEX_PREFIX = '{"type":"risu-plugin-storage-index"';
   const PREFIX_READ_LIMIT = 128;
   const SAMPLE_KEY_COUNT = 8;
-  // Heavy profiles take seconds per save (encode + write of the whole database), and a save that
-  // was already running when the pointer changed has to finish first; a timeout only reports.
-  const DEFAULT_SAVE_TIMEOUT_MS = 60000;
   const SAVE_POLL_INTERVAL_MS = 500;
   // Stock ea61945: pluginStorageStore.ts L56, L502-519 delays a call's own write after
   // the migration flush (L213-221); globalApi.svelte.ts L412-416 idles before saving.
@@ -37,7 +34,6 @@ const RisuPluginStorageFix = (() => {
     NOT_BROKEN: '현재 플러그인 저장소는 없는 목차를 가리키고 있지 않아요. 변경하지 않았어요.',
     CHANGED: '진단 뒤 플러그인 저장소가 달라졌어요. 다시 진단해 주세요.',
     CANDIDATE_INVALID: '되살릴 목차를 다시 읽을 수 없어요. 다시 진단해 주세요.',
-    SAVE_UNCONFIRMED: '변경은 했지만, 리스 저장 파일에 반영된 것을 1분 안에 확인하지 못했어요.',
     CANCELLED: '작업을 취소했어요.',
   };
 
@@ -344,7 +340,7 @@ const RisuPluginStorageFix = (() => {
     return (await readIndex(env, root, saved, signal)).state === 'healthy';
   }
 
-  async function recover(env, { pointer, candidateId, signal, timeoutMs } = {}) {
+  async function recover(env, { pointer, candidateId, signal, onWaiting } = {}) {
     const { root } = await checkBroken(env, pointer, signal);
     if (typeof candidateId !== 'string' || candidateId === pointer) throw new FixError('CANDIDATE_INVALID');
     const candidate = await readIndex(env, root, candidateId, signal);
@@ -355,16 +351,16 @@ const RisuPluginStorageFix = (() => {
     const editedAt = env.now();
     storage[POINTER_KEY] = candidateId;
     return await waitForPersisted(env, (saved) => acceptsPersistedPointer(env, root, saved, candidateId, pointer, signal),
-      { signal, timeoutMs, location, baseline, editedAt });
+      { signal, onWaiting, location, baseline, editedAt });
   }
 
-  async function reset(env, { pointer, signal, timeoutMs } = {}) {
+  async function reset(env, { pointer, signal, onWaiting } = {}) {
     const { root, location, baseline } = await prepareEdit(env, pointer, signal);
     const storage = checkLive(env, pointer, signal);
     const editedAt = env.now();
     delete storage[POINTER_KEY];
     return await waitForPersisted(env, (saved) => acceptsPersistedPointer(env, root, saved, null, pointer, signal),
-      { signal, timeoutMs, location, baseline, editedAt });
+      { signal, onWaiting, location, baseline, editedAt });
   }
 
   function toHex(text) {
@@ -471,7 +467,7 @@ const RisuPluginStorageFix = (() => {
   // A new backup opens the gate, but OPFS close() may still be in flight. IDB is transactional;
   // retain its gated snapshot while the live pointer settles, replacing it on every new read
   // (even an unknown read). Only unknown IDB reads get a bounded retry budget.
-  async function waitForPersisted(env, predicate, { signal, timeoutMs = DEFAULT_SAVE_TIMEOUT_MS, location, baseline, editedAt } = {}) {
+  async function waitForPersisted(env, predicate, { signal, onWaiting, location, baseline, editedAt } = {}) {
     throwIfCancelled(signal);
     requireWeb(env);
     const started = env.now();
@@ -480,6 +476,8 @@ const RisuPluginStorageFix = (() => {
     location = location || await databaseLocation(env);
     if (baseline === undefined) baseline = await latestBackup(env, location, signal);
     let lastBackup = baseline;
+    let lastSaveSeenAt = editedAt ?? started;
+    let saves = 0;
     let unknownRetries = 0;
     let saved = { format: 'unknown' };
     while (true) {
@@ -488,7 +486,12 @@ const RisuPluginStorageFix = (() => {
       const latest = await latestBackup(env, location, signal);
       const newer = latest > lastBackup;
       lastBackup = Math.max(lastBackup, latest);
-      if (newer) unknownRetries = SAVE_UNKNOWN_RETRY_COUNT;
+      if (newer) {
+        // Only a newer backup proves host save progress; memory-only pointer changes do not.
+        lastSaveSeenAt = env.now();
+        saves += 1;
+        unknownRetries = SAVE_UNKNOWN_RETRY_COUNT;
+      }
       const shouldRead = lastBackup > baseline && (location.kind === 'opfs' || newer || unknownRetries > 0);
       if (shouldRead) {
         if (!newer) unknownRetries -= 1;
@@ -511,13 +514,16 @@ const RisuPluginStorageFix = (() => {
       if (accepted && saved.pointer === livePointer && env.now() - lastChangeAt >= SAVE_SETTLE_MS) {
         return { confirmed: true, persistedPointer: saved.pointer };
       }
-      const remaining = timeoutMs - (env.now() - started);
-      if (remaining <= 0) throw new FixError('SAVE_UNCONFIRMED');
-      await env.sleep(Math.min(SAVE_POLL_INTERVAL_MS, remaining));
+      const now = env.now();
+      // Display failures must not turn an applied edit into a failed or replayed receipt wait.
+      try {
+        if (onWaiting) onWaiting({ waitedMs: now - (editedAt ?? started), sinceSaveMs: now - lastSaveSeenAt, saves });
+      } catch (error) {}
+      await env.sleep(SAVE_POLL_INTERVAL_MS);
     }
   }
 
-  return { DEFAULT_SAVE_TIMEOUT_MS, SAVE_POLL_INTERVAL_MS, PREFIX_READ_LIMIT, SAMPLE_KEY_COUNT,
+  return { SAVE_POLL_INTERVAL_MS, PREFIX_READ_LIMIT, SAMPLE_KEY_COUNT,
     FixError, createBrowserEnv, diagnose, findCandidates, recover, reset,
     readPersistedPointer, waitForPersisted };
 })();

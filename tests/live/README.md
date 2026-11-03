@@ -32,6 +32,11 @@ Needs Playwright with Chromium: `PLAYWRIGHT_MODULE=/path/to/node_modules/playwri
    - `not-settled` — another tab announces itself on stock's `risu-db` channel, so this tab stops
      saving and memory diverges from the saved file: the tool refuses (`NOT_SETTLED`), changes
      nothing and offers the reload; after it the normal reset confirms.
+   - `receipt-stuck` — the same channel message right before the reset is confirmed, so the host
+     never saves the edit: the panel shows its ⏳ still-waiting line, after a minute without a new
+     save it says what to check and shows the reload button but keeps waiting (no ⚠ on its own), the
+     saved file still holds the dead pointer, and the advised reload + re-run repairs normally with
+     the other values kept.
    - `aged-restore` / `aged-reset` — the host page's clock is moved ahead (init script, stock code
      untouched) past stock's trash grace (old indexes 1 h, large values 24 h): stock itself deletes
      the old index, an older database comes back (real dead state) → recover; or the cold files
@@ -45,8 +50,8 @@ Needs Playwright with Chromium: `PLAYWRIGHT_MODULE=/path/to/node_modules/playwri
    - Heavy-database measurement (not in `run-all.sh`): `RPF_BULK_MB=500` on `reset` / `opfs-db` / `reset-race`
      adds that many MB of chat text (stock-shaped characters) before the break and records `confirmMs`
      (reset click → ✅/⚠); `RPF_CPU_THROTTLE=6` slows the host page's CPU (DevTools emulation, storage I/O
-     untouched). A ⚠ receipt timeout is followed the way the panel advises (30 s, reload, re-run → "정상")
-     and recorded as `receiptTimedOut`. Run memory-capped, e.g.
+     untouched). Since 0.1.1 the tool never gives up on its own, so a heavy run must end ✅; heavy runs also
+     record a 1 s `timeline` of the newest backup number and the pointer. Run memory-capped, e.g.
      `systemd-run --user --scope -p MemoryMax=12G -p MemorySwapMax=0 node tests/live/drive.mjs reset-race bookmarklet`.
 3. `bash tests/live/run-all.sh` runs build, unit, mutation and every scenario above.
 4. After a release push, run the loader once without `LOCAL_CONSOLE` (it then loads the live

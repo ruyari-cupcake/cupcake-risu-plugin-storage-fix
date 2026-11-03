@@ -7,6 +7,7 @@ const { spawnSync } = require('node:child_process');
 
 const ROOT = path.join(__dirname, '..');
 const MUTANT_TIMEOUT_MS = 30000;
+const OBSOLETE_SAVE_TIMEOUT_MS = 60000;
 const source = fs.readFileSync(path.join(ROOT, 'src/core.js'), 'utf8');
 const MUTANTS = [
   ['allow account backend', "if (env.localStorage.getItem('accountst') === 'able') return 'account';", ''],
@@ -35,10 +36,10 @@ const MUTANTS = [
   ['commit missing IndexedDB creation', 'request.transaction.abort();', ''],
   ['open writable IndexedDB transaction', "db.transaction(OBJECT_STORE, 'readonly')", "db.transaction(OBJECT_STORE, 'readwrite')"],
   ['ignore unsettled persisted pointer', "if (saved.format !== 'risusave' || !saved.hasBlock || saved.pointer !== pointer) throw new FixError('NOT_SETTLED');", ''],
-  ['capture recovery baseline after edit', "{ signal, timeoutMs, location, baseline, editedAt });\n  }\n\n  async function reset", "{ signal, timeoutMs, location, editedAt });\n  }\n\n  async function reset"],
-  ['capture reset baseline after edit', "{ signal, timeoutMs, location, baseline, editedAt });\n  }\n\n  function toHex", "{ signal, timeoutMs, location, editedAt });\n  }\n\n  function toHex"],
+  ['capture recovery baseline after edit', "{ signal, onWaiting, location, baseline, editedAt });\n  }\n\n  async function reset", "{ signal, onWaiting, location, editedAt });\n  }\n\n  async function reset"],
+  ['capture reset baseline after edit', "{ signal, onWaiting, location, baseline, editedAt });\n  }\n\n  function toHex", "{ signal, onWaiting, location, editedAt });\n  }\n\n  function toHex"],
   ['freeze OPFS receipt after backup announcement', "location.kind === 'opfs' || newer || unknownRetries > 0", 'newer || unknownRetries > 0'],
-  ['never retry unknown IndexedDB receipt', 'if (newer) unknownRetries = SAVE_UNKNOWN_RETRY_COUNT;', 'if (newer) unknownRetries = 0;'],
+  ['never retry unknown IndexedDB receipt', 'unknownRetries = SAVE_UNKNOWN_RETRY_COUNT;', 'unknownRetries = 0;'],
   ['retry unknown IndexedDB receipt forever', 'if (!newer) unknownRetries -= 1;', ''],
   ['retry readable stale IndexedDB receipt', "if (saved.format !== 'unknown') unknownRetries = 0;", ''],
   ['reject valid successor indexes', "return (await readIndex(env, root, saved, signal)).state === 'healthy';", 'return false;'],
@@ -68,6 +69,12 @@ const MUTANTS = [
   ['sample live pointer before awaited verification',
     "const accepted = saved.format === 'risusave' && saved.hasBlock && await predicate(saved.pointer);\n      throwIfCancelled(signal);\n      requireWeb(env);\n      // Sample after all awaited reads/verification: a plugin can flush during either one.\n      // Deleting the live key gives undefined, while the persisted parser reports null.\n      const currentPointer = liveStorage(env)?.[POINTER_KEY] ?? null;",
     "const currentPointer = liveStorage(env)?.[POINTER_KEY] ?? null;\n      const accepted = saved.format === 'risusave' && saved.hasBlock && await predicate(saved.pointer);\n      throwIfCancelled(signal);\n      requireWeb(env);"],
+  ['reintroduce a fixed total cut', '      const now = env.now();', `      const now = env.now(); if (now - (editedAt ?? started) >= ${OBSOLETE_SAVE_TIMEOUT_MS}) throw new Error('fixed total cut');`],
+  ['reintroduce an idle cut', '      const now = env.now();', `      const now = env.now(); if (now - lastSaveSeenAt >= ${OBSOLETE_SAVE_TIMEOUT_MS}) throw new Error('idle cut');`],
+  ['sinceSaveMs never restarts', '        lastSaveSeenAt = env.now();', ''],
+  ['sinceSaveMs restarts on live-pointer change', '        lastChangeAt = env.now();', '        lastChangeAt = env.now(); lastSaveSeenAt = env.now();'],
+  ['onWaiting error propagates', '} catch (error) {}', '} catch (error) { throw error; }'],
+  ['onWaiting not called', 'if (onWaiting) onWaiting({ waitedMs: now - (editedAt ?? started), sinceSaveMs: now - lastSaveSeenAt, saves });', ''],
 ];
 
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'rpsf-mutants-'));
