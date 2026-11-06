@@ -167,6 +167,14 @@ const SUITES = [
 ];
 const MUTANTS = SUITES.flatMap((suite) => suite.mutants.map((mutant) => [suite, ...mutant]));
 
+/* Every needle must match its file exactly once BEFORE any mutant runs. A needle that a later source change made ambiguous
+   used to abort the run only when its turn came (0.2.0 review round: twice, ~20 minutes in, one bad needle per run); this
+   lists them all within a second. The per-mutant check below stays as the guard at the point of use. */
+const ambiguous = MUTANTS.map(([suite, label, from]) => [suite, label, fs.readFileSync(path.join(ROOT, suite.file), 'utf8').split(from).length - 1])
+  .filter(([, , count]) => count !== 1)
+  .map(([suite, label, count]) => `  "${label}" matches ${suite.file} ${count} times`);
+if (ambiguous.length) throw new Error(`every mutant needle must match exactly once:\n${ambiguous.join('\n')}`);
+
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'rpsf-mutants-'));
 let survivors = 0;
 try {
