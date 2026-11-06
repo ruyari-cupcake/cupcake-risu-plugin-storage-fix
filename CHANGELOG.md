@@ -21,6 +21,8 @@
   device's current login names another account.
 - If the login is refused, the server's file turns into another account's, or the chosen index vanishes AFTER the change
   was made, the panel says the change is already in this tab and the server save is unconfirmed (reload, run again).
+- Web (OPFS database): if RisuAI happens to save while the tool re-checks the save file right before a repair, the file
+  is read again instead of being reported as "the save file and this tab disagree" (seen once in repeated release runs).
 
 ## 0.1.1 — 2026-11-03
 

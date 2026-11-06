@@ -629,6 +629,50 @@ test('round1 unsettled persisted databases refuse both edits without any mutatio
   }
 });
 
+// Gate x3 run 2 (2026-11-06, opfs-db): a stock save replaced the OPFS database file while the pre-edit check read it; the
+// earlier File then throws NotReadableError (measured in Chromium) and the reset was refused as NOT_SETTLED. A replaced
+// snapshot is re-read; a file that is missing, foreign or damaged still refuses at once.
+const replacedError = () => Object.assign(new Error('The requested file could not be read'), { name: 'NotReadableError' });
+
+test('pre-edit check re-reads a database file stock replaced under the snapshot, then edits normally', async (t) => {
+  for (const method of ['reset', 'recover']) await t.test(method, async () => {
+    const f = fixture({ location: 'opfs' });
+    f.add('good', index([{ k: 'restored', s: '42' }]));
+    f.persist({ number: 1 });
+    let replacedReads = 0;
+    f.onFile((name) => {
+      if (name !== hex(DB)) return;
+      const item = f.files.get(name);
+      if (replacedReads < 2) { replacedReads += 1; item.error = replacedError(); } else delete item.error;
+    });
+    f.onSleep(() => { if (Object.hasOwn(f.live, '_coldpluginIndex') ? f.live._coldpluginIndex === 'good' : true) f.persist({ number: 2 }); });
+    const started = f.env.now();
+    let editAt = null;
+    f.onWrite(() => { if (editAt === null) editAt = f.env.now(); });
+    const result = await confirms(core[method](f.env, { pointer: 'dead', candidateId: 'good', signal: f.cancelAfter(8000 + core.SAVE_POLL_INTERVAL_MS) }));
+    assert.equal(result.confirmed, true);
+    assert.equal(result.persistedPointer, method === 'reset' ? null : 'good');
+    assert.equal(replacedReads, 2, 'two replaced snapshots were re-read before the edit');
+    assert.equal(editAt - started, 2 * core.SETTLED_READ_RETRY_MS, 'each re-read waits for the replacing save, then the edit follows');
+  });
+});
+
+test('pre-edit check gives up on a file that stays unreadable, and never retries a damaged or missing one', async (t) => {
+  for (const kind of ['always-replaced', 'damaged', 'missing']) await t.test(kind, async () => {
+    const f = fixture({ location: 'opfs' });
+    if (kind !== 'missing') f.persist({ number: 1 });
+    if (kind === 'damaged') f.putDatabase(Buffer.from('not a save'));
+    if (kind === 'always-replaced') f.onFile((name) => { if (name === hex(DB)) f.files.get(name).error = replacedError(); });
+    const before = untouched(f);
+    await assert.rejects(core.reset(f.env, { pointer: 'dead', signal: f.cancelAfter(60000) }), { code: 'NOT_SETTLED' });
+    const dbReads = f.calls.files.filter((name) => name === hex(DB)).length;
+    assert.equal(dbReads, kind === 'always-replaced' ? 4 : kind === 'missing' ? 0 : 1, `${kind}: database reads`);
+    assert.equal(f.calls.sleeps, kind === 'always-replaced' ? 3 : 0, `${kind}: only a replaced snapshot is waited for`);
+    assert.deepEqual(f.calls.writes, []);
+    assert.deepEqual(untouched(f), before);
+  });
+});
+
 test('round1 an initially matching disk value cannot confirm before a post-baseline save', async (t) => {
   for (const location of ['idb', 'opfs']) await t.test(location, async () => {
     const f = fixture({ location, storage: { _coldpluginIndex: 'good' } });

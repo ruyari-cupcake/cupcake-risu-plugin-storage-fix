@@ -29,6 +29,12 @@ const CORE_MUTANTS = [
   ['confirm memory rather than saved file', '        saved = await readAtLocation(env, location);', "saved = { format: 'risusave', hasBlock: true, pointer: liveStorage(env)?.[POINTER_KEY] ?? null };"],
   ['reread without backup gate', "const shouldRead = lastBackup > baseline && (location.kind === 'opfs' || newer || unknownRetries > 0);", 'const shouldRead = true;'],
   ['confirm unknown file as empty', '        saved = await readAtLocation(env, location);', "saved = await readAtLocation(env, location); if (saved.format === 'unknown') saved = { format: 'risusave', hasBlock: true, pointer: null };"],
+  /* Gate x3 run 2: a snapshot stock replaced mid-read is re-read before the pre-edit check calls the profile unsettled. */
+  ['pre-edit check never re-reads a replaced snapshot', 'read.replaced && attempt < SETTLED_READ_ATTEMPTS', 'false && attempt < SETTLED_READ_ATTEMPTS'],
+  ['pre-edit re-read reuses the stale snapshot', 'throwIfCancelled(signal);\n      read = await readSaved(env, location);', 'throwIfCancelled(signal);'],
+  ['pre-edit re-read without waiting for the save', '      await env.sleep(SETTLED_READ_RETRY_MS);\n', ''],
+  ['every unreadable save file counts as replaced', "replaced: error?.name === 'NotReadableError'", 'replaced: true'],
+  ['pre-edit re-reads without a bound', 'read.replaced && attempt < SETTLED_READ_ATTEMPTS', 'read.replaced'],
   ['confirm save without plugin block', "saved.format === 'risusave' && saved.hasBlock && await predicate(saved.pointer)", "saved.format === 'risusave' && await predicate(saved.pointer)"],
   ['sample keys keep non-string entries', ".filter((entry) => typeof entry?.k === 'string');", ';'],
   ['ignore cancellation', "if (signal && signal.aborted) throw new FixError('CANCELLED');", ''],

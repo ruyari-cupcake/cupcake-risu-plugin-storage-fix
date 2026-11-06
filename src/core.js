@@ -17,6 +17,11 @@ const RisuPluginStorageFix = (() => {
   const STOCK_SAVE_IDLE_MS = 500;
   const SAVE_SETTLE_MS = STOCK_PLUGIN_FLUSH_DELAY_MS + STOCK_SAVE_IDLE_MS + SAVE_POLL_INTERVAL_MS;
   const SAVE_UNKNOWN_RETRY_COUNT = 3;
+  /* Stock OpfsStorage.setItem replaces the database file (createWritable → write → close); a File taken from getFile()
+     before that close throws NotReadableError on read (Chromium, measured 2026-11-06). The pre-edit check therefore
+     reads a fresh snapshot up to this many times before it calls the profile unsettled; one save takes far less. */
+  const SETTLED_READ_ATTEMPTS = 4;
+  const SETTLED_READ_RETRY_MS = 250;
   const DATABASE_KEY = 'database/database.bin';
   /* Four reads balance hub scan latency against simultaneous worker load (design R4). */
   const HUB_SCAN_CONCURRENCY = 4;
@@ -868,7 +873,13 @@ const RisuPluginStorageFix = (() => {
   async function prepareEdit(env, pointer, signal) {
     await checkBroken(env, pointer, signal);
     const location = await databaseLocation(env);
-    const saved = await readAtLocation(env, location);
+    let read = await readSaved(env, location);
+    for (let attempt = 1; read.replaced && attempt < SETTLED_READ_ATTEMPTS; attempt += 1) {
+      await env.sleep(SETTLED_READ_RETRY_MS);
+      throwIfCancelled(signal);
+      read = await readSaved(env, location);
+    }
+    const { saved } = read;
     checkLive(env, pointer, signal);
     if (saved.format !== 'risusave' || !saved.hasBlock || saved.pointer !== pointer) throw new FixError('NOT_SETTLED');
     const { root } = await checkBroken(env, pointer, signal);
@@ -976,19 +987,25 @@ const RisuPluginStorageFix = (() => {
     return { format: 'risusave', hasBlock, pointer };
   }
 
-  async function readAtLocation(env, location) {
+  /* `replaced`: the read failed because stock swapped the file under the snapshot (NotReadableError) — a transient,
+     unlike a missing, foreign or damaged file, which reads the same way every time. */
+  async function readSaved(env, location) {
     try {
       let source;
       if (location.kind === 'opfs') {
         const handle = await location.root.getFileHandle(toHex(DATABASE_KEY));
         source = await handle.getFile();
       } else source = await env.forage.getItem(DATABASE_KEY);
-      if (!source) return { format: 'unknown' };
-      return await parseSavedPointer(env, source);
+      if (!source) return { saved: { format: 'unknown' }, replaced: false };
+      return { saved: await parseSavedPointer(env, source), replaced: false };
     } catch (error) {
       if (error?.code === 'CANCELLED') throw error;
-      return { format: 'unknown' };
+      return { saved: { format: 'unknown' }, replaced: error?.name === 'NotReadableError' };
     }
+  }
+
+  async function readAtLocation(env, location) {
+    return (await readSaved(env, location)).saved;
   }
 
   async function readPersistedPointer(env) {
@@ -1090,7 +1107,7 @@ const RisuPluginStorageFix = (() => {
     }
   }
 
-  return { SAVE_POLL_INTERVAL_MS, PREFIX_READ_LIMIT, SAMPLE_KEY_COUNT,
+  return { SAVE_POLL_INTERVAL_MS, SETTLED_READ_RETRY_MS, PREFIX_READ_LIMIT, SAMPLE_KEY_COUNT,
     FixError, createBrowserEnv, backend, diagnose, findCandidates, recover, reset,
     readPersistedPointer, waitForPersisted };
 })();

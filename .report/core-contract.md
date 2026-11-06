@@ -87,6 +87,11 @@ the bookmarklet must parse with every newline removed).
   pointer `=== candidateId`.
 - `async reset(env, {pointer, signal, onWaiting})` — same re-checks (no candidate); then
   `delete pluginCustomStorage._coldpluginIndex` and waits for the persisted pointer to be absent.
+- Web pre-edit settled check (both edits): the saved database must be RISUSAVE with a pluginStorage block whose pointer
+  equals the live one, else `NOT_SETTLED`. A read that throws `NotReadableError` means stock replaced the OPFS file
+  under the `getFile()` snapshot (`OpfsStorage.setItem`: createWritable → write → close; measured in Chromium
+  2026-11-06, gate x3 run 2 `opfs-db` was refused this way): it is re-read up to `SETTLED_READ_ATTEMPTS` (4) times,
+  `SETTLED_READ_RETRY_MS` (250 ms) apart. A missing, foreign or damaged file reads the same each time and refuses at once.
   Touches NOTHING else: other `pluginCustomStorage` keys (legacy inline values, `_coldplugin` map),
   cold storage files, safeLocalStorage, IndexedDB plugin stores all stay as they are.
 - `async readPersistedPointer(env)` → `{ format: 'risusave', hasBlock, pointer: string|null }` or
