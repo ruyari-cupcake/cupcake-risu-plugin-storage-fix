@@ -1,0 +1,60 @@
+### Verdict: CHANGE BEFORE BUILD
+
+The overall architecture (hub-first inspection, bounding full DB reads, non-destructive live pointer editing) is sound. However, three concrete edge cases—split-brain false health, settle timing vs stock's 3-second account sleep, and missing GET cache busters—must be addressed before writing code.
+
+---
+
+### Numbered Findings
+
+#### 1. Split-Brain Diagnosis Risk: Hub 404 + Local OPFS Healthy
+* **Reference**: Design § *Reading an index the way stock does* & § *diagnose (account)*; [`coldstorage.svelte.ts:43-69`](file:///tmp/claude-1000/-home-cupcake-workspace-cupcake/73043374-ee52-4fa0-b757-a28094c44049/scratchpad/v294/src_ts_process_coldstorage.svelte.ts#L43-L69)
+* **Failure Scenario**: When an index was created locally or migration failed to upload it, hub `GET /hub/account/coldstorage` returns 404. Stock falls back to local OPFS (`opts.accountFallback: true`) and successfully loads it on *this* machine. The design specifies that 404 + local `healthy` returns `healthy` with the message: *"the server reads it now — reload"*.
+  This diagnosis is factually false: the server does **not** have it. The current browser works via fallback, but all other synced devices (phone, laptop) lack this local OPFS file, get a hub 404, and crash with `Failed to load plugin storage index`. The user is misled into believing the server is healthy.
+* **Proposed Change**: Distinguish `healthy-hub` from `healthy-local-fallback` (or `account-desynced`). If hub 404s but OPFS has it, surface a dedicated warning explaining that the index exists only locally on this device and has not reached the account server, advising a flush/save or sync re-check.
+
+---
+
+#### 2. Settle Time Underflow vs Stock's 3-Second Account Delay
+* **Reference**: [`globalApi.svelte.ts:474-477`](file:///tmp/claude-1000/-home-cupcake-workspace-cupcake/73043374-ee52-4fa0-b757-a28094c44049/scratchpad/v294/src_ts_globalApi.svelte.ts#L474-L477); Design § *recover / reset (account)* (`SAVE_SETTLE_MS`)
+* **Failure Scenario**: In stock web mode, saves happen with minimal debounce. In account mode, stock explicitly executes `if (forageStorage.isAccount) { await sleep(3000); }` after writing to `AccountStorage`. The existing tool uses `SAVE_SETTLE_MS = 2000 ms` (`1000 + 500 + 500`).
+  In account mode, `SAVE_SETTLE_MS` is shorter than stock's single save cycle delay. If a plugin flushes or stock schedules a follow-up save, the receipt polling loop can prematurely decide the pointer has settled before stock finishes its post-save sleep and flushes any trailing changes.
+* **Proposed Change**: Define `ACCOUNT_SAVE_SETTLE_MS` (at least 4500–5000 ms) to account for stock's 3000 ms sleep plus host save idle and network round-trip.
+
+---
+
+#### 3. Omission of URL Cache-Busting UUID on Database Read
+* **Reference**: [`accountStorage.ts:98-105`](file:///tmp/claude-1000/-home-cupcake-workspace-cupcake/73043374-ee52-4fa0-b757-a28094c44049/scratchpad/v294/src_ts_storage_accountStorage.ts#L98-L105); Design § *Receipt (`waitForPersisted`)*
+* **Failure Scenario**: When reading `database/database.bin`, stock explicitly appends a UUID to the URL: `'/api/account/read/' + hex + (key.includes('database') ? ('|' + v4()) : '')`.
+  This bypasses aggressive browser, ServiceWorker, or Cloudflare/edge CDN response caching for GET requests. If the tool queries `/api/account/read/<hex>` without the random suffix, an edge cache or HTTP cache can return a stale 303 `{match: true}` or a cached 200 body from a previous poll.
+* **Proposed Change**: Mirror stock's exact path structure in the tool's fetch helper: append `|` + `uuid()` whenever querying `database/database.bin`.
+
+---
+
+#### 4. Candidate Ordering Tie-Breaker & `missingLarge` Guardrail
+* **Reference**: Design § *Candidates (account)*; [`pluginStorageStore.ts:50-62, 455-465`](file:///tmp/claude-1000/-home-cupcake-workspace-cupcake/73043374-ee52-4fa0-b757-a28094c44049/scratchpad/v294/src_ts_process_pluginStorageStore.ts#L455-L465)
+* **Failure Scenario**:
+  1. A "first index" (generated when no prior pointer existed) contains no `index: true` trash entries, so its `flushedAt` is `null`. If a profile has undergone resets or multiple independent creations, multiple candidates have `flushedAt: null`. Relying on `null last` leaves their mutual order unstable across scans.
+  2. If an older index on the hub references large items that were subsequently purged, `missingLarge > 0`. If the user recovers this candidate without an explicit confirmation gate, plugins attempting to fetch large values immediately fail silently or throw.
+* **Proposed Change**:
+  1. Add a deterministic secondary sort: `(b.flushedAt ?? 0) - (a.flushedAt ?? 0) || b.keyCount - a.keyCount || b.id.localeCompare(a.id)`.
+  2. If `selectedCandidate.missingLarge > 0`, require an explicit confirmation in the UI noting how many large values will be unreadable.
+
+---
+
+### Gaps in the Test Plan
+
+1. **Un-awaited IDB write race in fake saver**:
+   Stock's `AccountStorage.setItem` does:
+   ```ts
+   cachedForage.setItem(key, value).then(() => { cachedForage.setItem(key + '__date', saveDate) })
+   ```
+   This is an floating, un-awaited promise. A fake saver in unit tests that writes both synchronously will not test what happens if the receipt poller reads `cachedForage` while `key` is mid-write or before `__date` commits. The unit harness must inject microtask interleaving between `setItem(key)` and `setItem(key + '__date')`.
+2. **Account key removal mechanism in live harness**:
+   The live test plan states: *"the harness removes Y from the hub with the stock remove request"*. But stock's `AccountStorage.removeItem` explicitly throws: `throw "Error: You cannot remove data in account..."` ([`accountStorage.ts:167-169`](file:///tmp/claude-1000/-home-cupcake-workspace-cupcake/73043374-ee52-4fa0-b757-a28094c44049/scratchpad/v294/src_ts_storage_accountStorage.ts#L167-L169)). The live harness cannot use `AccountStorage.removeItem`; it must use whatever raw endpoint or protocol stock's `collectTrash` / hub worker actually accepts, or document the exact mock/hub call used.
+
+---
+
+### Could Not Verify Here
+
+1. **Server-side date match semantics**: Whether the hub server validates `x-risu-save-date` solely by strict integer string equality or timestamp recency, and whether server-side aborts could ever leave a date updated while DB bytes roll back.
+2. **Cold storage deletion endpoint**: The exact HTTP method and route stock's backend uses for `collectTrash` hub removals, given `AccountStorage.removeItem` throws on the client.

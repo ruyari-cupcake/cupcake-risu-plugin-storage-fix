@@ -12,7 +12,6 @@ venue_freeze
 step npm test
 step npm run mutate
 step node tests/live/drive.mjs healthy console
-step node tests/live/drive.mjs account console
 step node tests/live/drive.mjs reset bookmarklet
 step node tests/live/drive.mjs reset-race bookmarklet
 step node tests/live/drive.mjs recover bookmarklet
@@ -25,5 +24,9 @@ step node tests/live/drive.mjs aged-reset console
 LOCAL_CONSOLE=1 step node tests/live/drive.mjs reset loader
 if [ "${SKIP_HOSTED_SITE:-0}" != "1" ]; then
   BASE_URL=https://risuai.xyz/ LOCAL_CONSOLE=1 step node tests/live/drive.mjs reset loader
+  # Account mode runs on the official site with the TEST account (RPF_ACCOUNT_ENV; see account-live.mjs).
+  for account_scenario in account-recover account-reset account-unavailable account-login account-local-only; do
+    BASE_URL=https://risuai.xyz/ step node tests/live/drive.mjs "$account_scenario" bookmarklet
+  done
 fi
 echo "run-all: every step passed"

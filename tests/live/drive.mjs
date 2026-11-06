@@ -4,8 +4,11 @@
 //     node tests/live/drive.mjs <scenario> [form]
 //
 // scenario: venue (harness sanity, no tool) | healthy | reset | reset-race | recover | recover-account-hint
-//           | not-settled | receipt-stuck | opfs-db | account | aged-restore | aged-reset
-//           (aged = host clock moved past stock trash grace; receipt-stuck = host stops saving during the receipt)
+//           | not-settled | receipt-stuck | opfs-db | aged-restore | aged-reset
+//           | account-recover | account-reset | account-unavailable | account-login | account-local-only
+//           (aged = host clock moved past stock trash grace; receipt-stuck = host stops saving during the receipt;
+//            account-* = Risu account sync on the TEST account from tests/live/account-live.mjs — run with
+//            BASE_URL=https://risuai.xyz/; the harness empties that account's cold storage and overwrites its database)
 // form:     bookmarklet (default) | console | loader   (loader + LOCAL_CONSOLE=1 serves the hosted
 //           console URL from this checkout, so it can run before a release)
 // BASE_URL=https://risuai.xyz/ runs against that origin instead of serving STOCK_DIR.
@@ -17,6 +20,9 @@ import path from 'node:path';
 import http from 'node:http';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import {
+  emptyHubColdStorage, hubSession, loginAndSync, hubPointer, waitHubSaved, failHubColdReads,
+} from './account-live.mjs';
 
 const require = createRequire(import.meta.url);
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
@@ -439,6 +445,50 @@ async function expectDead(page) {
   step('dead state reproduced', { error: read.error.slice(0, 80) });
 }
 
+// The panel must never show the login token (or anything from the database root, which carries it).
+async function expectAccountPanelClean(page) {
+  const secrets = await page.evaluate(() => {
+    const out = [];
+    try { out.push(JSON.parse(localStorage.getItem('fallbackRisuToken') || 'null')?.token || ''); } catch (error) {}
+    return out.filter((value) => value.length >= 16);
+  });
+  gate(secrets.length > 0, 'NO_TOKEN_TO_CHECK');
+  const text = await page.locator(PANEL).evaluate((host) => host.shadowRoot.textContent || '');
+  gate(secrets.every((secret) => !text.includes(secret)), 'TOKEN_SHOWN_IN_PANEL');
+}
+
+// A second browser profile logs in to the same account, LOADS it (as a phone or another computer would) and reads the
+// plugin values through its own probe — the repair reached the account, not only this tab.
+// `pointer`: the index the account's saved database names at that moment — the second device must load exactly it,
+// so a successor index uploaded later by device 1 can never stand in for the repaired one.
+async function secondDeviceReads(base, expected, { pointer: expectedPointer } = {}) {
+  const profile = fs.mkdtempSync(path.join(WORK, `profile-${scenario}-device2-`));
+  const context = await chromium.launchPersistentContext(profile, { headless: true, viewport: { width: 1280, height: 900 }, locale: 'en-US', args: ['--no-sandbox'] });
+  try {
+    await context.addInitScript(() => { globalThis.__RISU_LEGAL_CONFIGURED__ = true; });
+    const page = context.pages()[0] || await context.newPage();
+    page.setDefaultTimeout(20000);
+    page.on('dialog', (dialog) => (dialog.type() === 'beforeunload' ? dialog.accept() : dialog.dismiss()).catch(() => {}));
+    await boot(page, base);
+    await loginAndSync(page, { choice: 'load', boot, until, sleep });
+    gate((await page.evaluate(() => localStorage.getItem('accountst'))) === 'able', 'DEVICE2_NOT_IN_ACCOUNT_MODE');
+    gate(typeof expectedPointer === 'string', 'DEVICE2_EXPECTED_POINTER_MISSING');
+    await probeFrame(page);
+    const loaded = await pointer(page);
+    gate(loaded === expectedPointer, 'DEVICE2_POINTER_WRONG', { loadedIsExpected: loaded === expectedPointer });
+    const read = {};
+    for (const [key, value] of Object.entries(expected)) {
+      const got = await store(page, 'get', key);
+      read[key] = got.ok ? got.value : `ERROR ${String(got.error).slice(0, 60)}`;
+      gate(got.ok && JSON.stringify(got.value) === JSON.stringify(value), 'DEVICE2_VALUE_WRONG', { key, got, value });
+    }
+    step('a second device loading the account reads the values', read);
+  } finally {
+    await context.close().catch(() => {});
+    fs.rmSync(profile, { recursive: true, force: true });
+  }
+}
+
 async function main() {
   fs.mkdirSync(WORK, { recursive: true });
   gate(scenario === 'venue' || fs.existsSync(path.join(DIST, 'console.js')), 'RUN_NPM_BUILD_FIRST');
@@ -449,6 +499,8 @@ async function main() {
     ({ server, base } = await serveStock(path.resolve(process.env.STOCK_DIR)));
   }
   record.base = base;
+  const ACCOUNT = scenario.startsWith('account-');
+  if (ACCOUNT) step('account cold storage emptied (TEST account)', { removed: await emptyHubColdStorage() });
   const profile = fs.mkdtempSync(path.join(WORK, `profile-${scenario}-`));
   const context = await chromium.launchPersistentContext(profile, { headless: true, viewport: { width: 1280, height: 900 }, locale: 'en-US', args: ['--no-sandbox'] });
   try {
@@ -492,6 +544,12 @@ async function main() {
 
     await boot(page, base);
     step('host booted', { version: await page.evaluate(() => document.title) });
+    if (ACCOUNT) {
+      // A fresh profile uploads its (empty) database over the TEST account's: every run starts from the same account state.
+      await loginAndSync(page, { choice: 'save', boot, until, sleep });
+      gate((await page.evaluate(() => localStorage.getItem('accountst'))) === 'able', 'ACCOUNT_MODE_NOT_ON');
+      step('account sync on (TEST account, database uploaded from the fresh profile)');
+    }
     await installProbe(page);
     await probeFrame(page);
     step('probe plugin running');
@@ -512,18 +570,118 @@ async function main() {
       step('tool says healthy', { text: text.split('\n')[0] });
       gate((await pointer(page)) === before, 'HEALTHY_POINTER_CHANGED');
       gate(!(await page.locator(`${PANEL} button.reset`).isVisible()), 'HEALTHY_OFFERS_RESET');
-    } else if (scenario === 'account') {
+    } else if (scenario === 'account-recover') {
+      // An older database (pointer at an index that no longer exists) reaches the account while the newest index is still
+      // on the server: the tool finds it on the hub, repairs the synced pointer, and a SECOND device loading the account
+      // reads the recovered values.
+      await seed(page, [['alpha', 1]]);
+      await seed(page, [['alpha', 2], ['beta', 'latest']]);
+      const newest = await pointer(page);
+      await waitHubSaved(page, { until });
+      const listed = await (await hubSession()).list();
+      gate(listed.includes(newest), 'NEWEST_INDEX_NOT_ON_HUB', { listed: listed.length });
+      await page.evaluate(() => { window.__pluginApis__.getDatabase().pluginCustomStorage._coldpluginIndex = crypto.randomUUID(); });
+      const dead = await pointer(page);
+      await waitHubSaved(page, { until });
+      step('account database points at a missing index', { hubKeys: listed.length });
+      await reload(page);
+      await expectDead(page);
+      await runTool(page);
+      await panelStatus(page, /계정 서버에 플러그인 저장소 목차가 없어요/, 240000);
+      await expectAccountPanelClean(page);
+      const first = page.locator(`${PANEL} input[name="candidate"]`).first();
+      gate((await first.getAttribute('value')) === newest && await first.isChecked(), 'NEWEST_NOT_FIRST_CHOICE', { first: await first.getAttribute('value'), newest });
+      gate(await page.locator(`${PANEL} button.recover`).isDisabled(), 'RECOVER_OPEN_WITHOUT_DEVICE_GATE');
+      await page.locator(`${PANEL} input.devices-closed`).check();
+      gate(!(await page.locator(`${PANEL} button.recover`).isDisabled()), 'RECOVER_CLOSED_AFTER_DEVICE_GATE');
+      step('newest hub index offered first; recover waits for the other-devices box', { candidates: await page.locator(`${PANEL} input[name="candidate"]`).count() });
+      await page.locator(`${PANEL} button.recover`).click();
+      const done = await panelStatus(page, /✅|⚠|❌ (?!계정 서버에 플러그인 저장소 목차)/, 300000);
+      gate(done.startsWith('✅'), 'RECOVER_NOT_CONFIRMED', { done: done.slice(0, 200) });
+      const onHub = await hubPointer(page);
+      gate(onHub.pointer === newest, 'HUB_NOT_REPAIRED', { onHub: onHub.pointer === dead ? 'dead' : onHub });
+      await expectAccountPanelClean(page);
+      await reloadFromPanel(page);
+      gate((await pointer(page)) === newest, 'RECOVERED_POINTER_LOST_AFTER_RELOAD');
+      const alpha = await store(page, 'get', 'alpha');
+      const beta = await store(page, 'get', 'beta');
+      gate(alpha.ok && alpha.value === 2 && beta.ok && beta.value === 'latest', 'RECOVERED_VALUES_WRONG', { alpha, beta });
+      step('recovered values readable after reload', { alpha: alpha.value, beta: beta.value });
+      const hubNow = await hubPointer(page);
+      gate(hubNow.hasBlock && hubNow.pointer === newest, 'HUB_POINTER_MOVED_BEFORE_DEVICE2', { isDead: hubNow.pointer === dead });
+      await secondDeviceReads(base, { alpha: 2, beta: 'latest' }, { pointer: newest });
+    } else if (scenario === 'account-reset') {
+      await seed(page, [['alpha', 1], ['beta', 'two']]);
+      const dead = await pointer(page);
+      await waitHubSaved(page, { until });
+      step('every cold item removed from the account server', { removed: await emptyHubColdStorage() });
+      await reload(page);
+      await expectDead(page);
+      await runTool(page);
+      await panelStatus(page, /계정 서버에 플러그인 저장소 목차가 없어요/, 240000);
+      gate((await page.locator(`${PANEL} input[name="candidate"]`).count()) === 0, 'UNEXPECTED_CANDIDATES');
+      await page.locator(`${PANEL} input.devices-closed`).check();
+      await page.locator(`${PANEL} button.reset`).click();
+      await page.locator(`${PANEL} input.agree`).check();
+      await page.locator(`${PANEL} button.do-reset`).click();
+      const done = await panelStatus(page, /✅|⚠|❌ (?!계정 서버에 플러그인 저장소 목차)/, 300000);
+      gate(done.startsWith('✅'), 'RESET_NOT_CONFIRMED', { done: done.slice(0, 200) });
+      const onHub = await hubPointer(page);
+      gate(onHub.status === 200 && onHub.hasBlock === true && onHub.pointer === null, 'HUB_STILL_HAS_POINTER',
+        { dead: onHub.pointer === dead, hasBlock: onHub.hasBlock === true, truncated: onHub.truncated === true });
+      await reloadFromPanel(page);
+      const alpha = await store(page, 'get', 'alpha');
+      gate(alpha.ok && alpha.value === null, 'RESET_STORE_NOT_EMPTY', alpha);
+      const write = await store(page, 'set', 'gamma', { after: 'reset' });
+      gate(write.ok, 'WRITE_AFTER_RESET_FAILED', write);
+      await sleep(FLUSH_SETTLE_MS);
+      await waitHubSaved(page, { until });
+      const afterWrite = await hubPointer(page);
+      gate(afterWrite.hasBlock && typeof afterWrite.pointer === 'string' && afterWrite.pointer !== dead, 'HUB_NEW_INDEX_MISSING',
+        { isDead: afterWrite.pointer === dead });
+      step('reset store works and its new index reached the account');
+      await secondDeviceReads(base, { gamma: { after: 'reset' }, alpha: null }, { pointer: afterWrite.pointer });
+    } else if (scenario === 'account-unavailable' || scenario === 'account-login') {
+      // The server fails (503) or refuses the login (403) for every cold read — the tool's and stock's alike.
       await seed(page, [['alpha', 1]]);
       const before = await pointer(page);
-      const deleted = await coldFiles(page, 'delete');
-      step('cold files deleted', { count: deleted.length });
-      await page.evaluate(() => localStorage.setItem('accountst', 'able'));
+      await waitHubSaved(page, { until });
+      const status = scenario === 'account-login' ? 403 : 503;
+      await failHubColdReads(context, status);
+      await reload(page);
+      await expectDead(page);
       await runTool(page);
-      const text = await panelStatus(page, /계정 저장 모드/);
-      step('tool refuses account mode', { text: text.split('\n')[0] });
-      gate((await pointer(page)) === before, 'ACCOUNT_POINTER_CHANGED');
-      gate(!(await page.locator(`${PANEL} button.reset`).isVisible()), 'ACCOUNT_OFFERS_RESET');
-      await page.evaluate(() => localStorage.removeItem('accountst'));
+      const text = await panelStatus(page, scenario === 'account-login' ? /로그인을 계정 서버가 받아 주지 않아요/ : /계정 서버에서 .*못했어요/, 240000);
+      step(`tool reports ${scenario.slice('account-'.length)} and changes nothing`, { text: text.split('\n')[0].slice(0, 80) });
+      gate((await pointer(page)) === before, 'POINTER_CHANGED');
+      gate(!(await page.locator(`${PANEL} button.reset`).isVisible()) && !(await page.locator(`${PANEL} button.recover`).isVisible()), 'REPAIR_OFFERED');
+      await expectAccountPanelClean(page);
+      await context.unroute('https://sv.risuai.xyz/hub/account/coldstorage');
+      gate((await hubPointer(page)).pointer === before, 'HUB_POINTER_CHANGED');
+    } else if (scenario === 'account-local-only') {
+      // The hub lost the index but this browser still holds an old local copy: stock reads it here (fallback), every other
+      // device fails. The tool says so and changes nothing.
+      await seed(page, [['alpha', 1]]);
+      const current = await pointer(page);
+      await waitHubSaved(page, { until });
+      const hub = await hubSession();
+      const copy = await hub.get(current);
+      gate(copy.status === 200, 'INDEX_NOT_ON_HUB', { status: copy.status });
+      await page.evaluate(async ({ name, bytes }) => {
+        const dir = await navigator.storage.getDirectory();
+        const writable = await (await dir.getFileHandle(name, { create: true })).createWritable();
+        await writable.write(new Uint8Array(bytes));
+        await writable.close();
+      }, { name: `coldstorage_${current}.json`, bytes: Array.from(copy.bytes) });
+      await hub.remove([current]);
+      await reload(page);
+      const local = await store(page, 'get', 'alpha');
+      gate(local.ok && local.value === 1, 'LOCAL_FALLBACK_NOT_READ', local);
+      await runTool(page);
+      await panelStatus(page, /이 기기에 남아 있던 예전 사본만 있어요/, 240000);
+      gate((await pointer(page)) === current, 'POINTER_CHANGED');
+      gate(!(await page.locator(`${PANEL} button.reset`).isVisible()) && !(await page.locator(`${PANEL} button.recover`).isVisible()), 'REPAIR_OFFERED');
+      step('local-only copy reported, nothing changed');
     } else if (scenario === 'reset' || scenario === 'opfs-db' || scenario === 'reset-race') {
       // reset-race: a plugin writes right after the pointer is cleared, so the store flushes a NEW
       // index before the host saves; the tool must still confirm (a verified successor) and the

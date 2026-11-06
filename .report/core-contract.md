@@ -57,14 +57,18 @@ the bookmarklet must parse with every newline removed).
   `{ pluginApis(), localStorage, isNode, isTauri, opfsRoot(), forage: {keys(), getItem(key)} (raw
   IndexedDB `risuai`/`keyvaluepairs`, read-only, never creates the DB: if opening triggers
   `onupgradeneeded`, abort and treat as empty), gunzip(Blob|Uint8Array) via DecompressionStream('gzip'),
-  now(), sleep(ms) }`. Tests pass their own fake env with the same shape.
+  now(), sleep(ms) }`. Tests pass their own fake env with the same shape. Account mode additionally uses
+  `fetch(url, init)` (bound to the injected global), read-only `accountCache: {keys(), getItem(key)}`
+  (`risuaiAccountCached` / `keyvaluepairs`, abort missing-DB upgrades), `randomId()` (crypto.randomUUID),
+  and `hubBase()` (read current `localStorage.hub`: nightly → `https://nightly.sv.risuai.xyz`, else
+  `https://sv.risuai.xyz`). All adapters are lazy; web operations never access accountCache or fetch.
 - `FixError` (code + Korean message), codes at least: `NOT_RISU`, `NOT_READY`, `UNSUPPORTED_BACKEND`,
   `NOT_BROKEN`, `CHANGED` (live pointer differs from the diagnosed one), `CANDIDATE_INVALID`,
   `CANCELLED` (0.1.1 removed `SAVE_UNCONFIRMED`: the receipt never gives up on its own, R32).
 - `async diagnose(env, {signal, onProgress})` → one of
   - `{ state: 'not-risu' }` — no `__pluginApis__`/`getDatabase`;
   - `{ state: 'not-ready' }` — `getDatabase().pluginCustomStorage` missing/not an object;
-  - `{ state: 'unsupported-backend', backend: 'account'|'node'|'tauri' }` — decided BEFORE touching storage;
+  - `{ state: 'unsupported-backend', backend: 'node'|'tauri' }` — decided BEFORE touching storage;
   - `{ state: 'no-index', backend: 'web' }` — pointer not a string (healthy: nothing stored yet);
   - `{ state: 'healthy', backend: 'web', pointer, keyCount }` — pointer file exists and parses as an index;
   - `{ state: 'broken', backend: 'web', pointer, reason: 'missing'|'unreadable', candidates }` —
@@ -98,6 +102,57 @@ the bookmarklet must parse with every newline removed).
   gets `{waitedMs, sinceSaveMs, saves}` each poll (`sinceSaveMs` restarts on a newer backup); its errors are
   swallowed. Tunables are named constants.
 
+## Account API (design r1; stock v2026.10.294)
+
+Authority: `account-mode-design.md` r1 and `account-mode-review/05-sol-spec.md`. The stock account save
+writes cache bytes and `database/database.bin__date` even when the hub rejects the save
+(`src/ts/storage/accountStorage.ts:23-95`); neither is a receipt. The cache root supplies the first token
+source, fallbackRisuToken the second; only an initial 403 advances to the next source. Accepted identity
+and hub remain bound to the run. Credential IDs remain strings; a present hub root ID of any type
+must match that accepted string exactly (non-string IDs are mismatches, not absent identities).
+ignoreRisuAuth=true refuses diagnosis/edits without guessing an auth method.
+
+- `backend(env)` exposes the existing selection order: account, node, tauri, web.
+- `diagnose` in account mode requires OPFS, DecompressionStream and fetch. All account-specific results
+  carry `backend: 'account'`: `no-index`; `healthy {pointer,keyCount}`; `local-only {pointer,keyCount}`;
+  `account-login`; `account-auth-unknown`; `account-mismatch`; `account-not-settled {pointer}`;
+  `account-unavailable {status: number|null, phase: 'db'|'index'|'list'|'scan'}`; `uncertain {pointer}`;
+  `broken {pointer,reason:'missing'|'unreadable',candidates,uncertainCount}`. Shared not-risu/not-ready and
+  unsupported-browser retain their meaning. No account/root credentials are returned.
+- Every request is GET, no-store, x-risu-auth, and a run AbortSignal. DB reads use a fresh UUID suffix,
+  x-risu-save-date=0 and x-risu-key=database/database.bin. The incremental RISUSAVE reader shares the
+  byte-array/cache and streaming/hub format rule: ROOT=1/name=root for account.id (token only for local
+  credential selection), PLUGIN_STORAGE=11/name=pluginStorage for the pointer. It handles split headers
+  and lengths, gzip and an empty gzip payload (hasBlock=true, pointer=null), rejects truncation, skips
+  other blocks, and cancels immediately after pluginStorage, before characters/chats.
+- R2: a 200 index must decode and match the unchanged stock acceptance rule; gzip failures are uncertain,
+  JSON/shape failures unreadable. Missing requires 404, absence from @list-keys, then another 404 at least
+  HUB_MISSING_RECHECK_MS=2000 later. Listed/reappearing items are unavailable, never missing. A healthy
+  OPFS fallback yields local-only, not authority to repair. Hub receipt validation never uses that fallback.
+- R4: every listed key except the pointer is scanned, with at most HUB_SCAN_CONCURRENCY=4 streams; the
+  prefix rejects non-index items early. Any listed non-200 (404/403/429/5xx included) aborts the complete
+  scan and queued/in-flight work, without retries or offering repair. Candidate fields are
+  `{id,flushedAt:number|null,keyCount,sampleKeys,largeCount,missingLarge}`; flushedAt is the maximum finite
+  index:true trash timestamp, missingLarge uses the complete hub key set. Sort flushedAt descending (null
+  last), keyCount descending, then id ascending. findCandidates remains an array-returning API.
+- `recover` / `reset` add `devicesClosed`. In account mode strict true is required before any database/cache
+  or network read; web mode ignores it. Both recheck the live pointer, fresh hub pointer/identity, R2
+  brokenness, complete scan and accepted credential source across awaited preflight reads. recover also
+  rereads its hub candidate. They perform exactly one live property set/delete and never replay or undo it.
+  New Korean FixError codes: DEVICES_NOT_CONFIRMED, ACCOUNT_LOGIN, ACCOUNT_UNAVAILABLE, ACCOUNT_MISMATCH,
+  TARGET_GONE. Existing NOT_SETTLED, CHANGED, NOT_BROKEN, CANDIDATE_INVALID, UNCERTAIN and CANCELLED apply.
+  Auth-unknown repair refusal uses UNCERTAIN. Error messages never include transport errors, tokens or root fields.
+- Receipts resolve `{confirmed:true,persistedPointer}` only after the live pointer is quiet for
+  ACCOUNT_SAVE_SETTLE_MS=1000+3000+500+500=5000 (stock plugin flush, account post-save sleep, save idle,
+  poll), then a newly requested hub DB matches it and a fresh hub target/successor is valid. A proven gone
+  original target raises TARGET_GONE, leaving the edit in place; unverifiable successors keep waiting.
+  Each 500ms poll reads only the cache date. New dates, quiet-window close, and unresolved backoff
+  (2000ms doubling to 60000ms, reset on new dates) trigger fresh DB reads. A 303 never confirms. No receipt
+  deadline exists; only explicit cancellation ends an unresolved wait. Account onWaiting adds hubRejecting
+  after three consecutive new dates whose fresh hub read retains the dead pointer, resetting on other or
+  unavailable snapshots. The unchanged web callback omits this account-only flag (treated as false by UI).
+  Throwing display callbacks cannot stop a receipt or replay an edit.
+
 ## Outcome contract
 
 On stock RisuAI v2026.10.292 web (IndexedDB or OPFS database), a profile whose
@@ -105,13 +160,23 @@ On stock RisuAI v2026.10.292 web (IndexedDB or OPFS database), a profile whose
 exists) the persisted database points at that index and a reload makes every
 `risuai.pluginStorage` call succeed with the recovered keys; after `reset` the persisted database has
 no pointer and a reload makes every call succeed on an empty store. A healthy profile is never
-changed. Account / node / Tauri profiles are never changed.
+changed. Node / Tauri profiles are never changed. In account sync mode, diagnosis uses the account hub
+rather than the local fallback to distinguish transient failures, local-only data and genuinely broken
+indexes. A complete hub scan may authorize a single live pointer repair, but success requires a FRESH
+hub database read after settling and a fresh readable hub index (or an absent pointer after reset).
+Uncertain/partial preflight situations change nothing. Unit fixtures verify the protocol/state machine
+and exact simulated hub reopen, not actual stock browser persistence or multi-device sync; the live
+account scenarios remain a separate release gate.
 
 ## Preservation contract
 
 Never write, delete or rename any cold storage file, database file, IndexedDB record, localStorage
 key or plugin key other than the single `_coldpluginIndex` property. Never create the `risuai`
-IndexedDB database. Never send anything over the network.
+IndexedDB database or `risuaiAccountCached`. In web mode never send anything over the network and never
+open the account cache. In account mode only GET the stock hub endpoints using the stock-kept login;
+never POST, remove, write, delete or create remote/local storage. Preserve all non-pointer fields,
+object identities, cold item contents and database blocks. The shared stock index acceptance rule
+remains owned by isPluginStorageIndex; neither transport introduces a stricter or broader format.
 
 ## Tests (`tests/core.test.cjs`, `node --test`, no dependencies, Node ≥ 20)
 

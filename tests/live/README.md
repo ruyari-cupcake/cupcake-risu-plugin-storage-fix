@@ -19,7 +19,22 @@ Needs Playwright with Chromium: `PLAYWRIGHT_MODULE=/path/to/node_modules/playwri
    - `venue` — harness sanity only: deleting the OPFS `coldstorage_*` files reproduces
      `Failed to load plugin storage index` on every plugin storage call.
    - `healthy` — the tool says "정상" and changes nothing.
-   - `account` — with `accountst=able` the tool refuses and changes nothing.
+   - Account mode (0.2.0; `BASE_URL=https://risuai.xyz/`, TEST account in `RPF_ACCOUNT_ENV` — default
+     `~/.config/cpm-secrets/risu-test-account.env`, keys `RISU_TEST_ID` / `RISU_TEST_PASSWORD`; **a throwaway account**: every
+     run empties its cold storage and uploads a fresh database over it; helpers in `account-live.mjs`, oracle = a fresh hub
+     read independent of the tool):
+     - `account-recover` — the account database points at a missing index while the newest stays on the server: the tool
+       offers it first, waits for the other-devices box, recovers; the server's own save file then holds it, a reload reads the
+       values, and a second fresh profile that LOADS the account reads them too.
+     - `account-reset` — every cold item removed from the server → no candidates → reset → the server holds no pointer, the
+       store works after reload, and a second device reads the new value.
+     - `account-unavailable` / `account-login` — every cold read routed to 503 / 403 (stock's and the tool's): the tool reports
+       it, offers no repair and changes nothing (live and server pointer).
+     - `account-local-only` — the server lost the index but this browser holds an OPFS copy (stock reads it here): reported,
+       nothing changed.
+   - `account-save-probe.cjs` (design probe, not a release step): measures how stock saves in account mode — the IndexedDB
+     cache `risuaiAccountCached` + `__date`, and the hub read's 303 for a matching date. 0.2.0 deliberately does NOT trust that
+     pair (stock writes it even for rejected saves); re-run it when RisuAI changes `accountStorage.ts`.
    - `reset` — dead index, no survivor: reset → the panel's reload button → the dead pointer never
      returns, a legacy inline value survives, a new write persists across another reload.
    - `opfs-db` — the same with the host database in OPFS (`opfs_flag!`), asserting the location.

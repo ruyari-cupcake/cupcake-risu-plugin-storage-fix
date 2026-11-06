@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.0 — 2026-11-06
+
+- Risu account sync mode (`accountst=able`) is now diagnosed and repaired instead of refused. The tool asks the account
+  server directly — the same read requests RisuAI makes, with the login this device keeps; it never sends a write or
+  delete — so a passing server error ("reload"), a rejected login ("reload, log in through RisuAI's own login box"), a
+  copy that exists only on this device, and a really missing index are told apart. A missing index is recovered from an
+  index still on the server (never from a copy only this device has), or cleared when none survives.
+- Account repairs need the "other devices and tabs are closed" box (the change reaches every device on the account), and
+  ✅ appears only after a fresh read of the account server's own save file shows the repaired pointer and the recovered
+  index still readable there — the device cache is never trusted (RisuAI updates it even when the server rejects a save).
+- Any incomplete server check (an item that does not answer, 404 included) offers no recover or reset.
+
 ## 0.1.1 — 2026-11-03
 
 - The save check never gives up on its own (a big database on a slow device used to get a false warning after

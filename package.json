@@ -1,6 +1,6 @@
 {
   "name": "cupcake-risu-plugin-storage-fix",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "private": true,
   "description": "컵케익 리스 플러그인 저장소 고치기 — repairs a RisuAI web profile stuck on \"Failed to load plugin storage index\" by recovering a surviving index or clearing the dangling pointer.",
   "license": "MIT",

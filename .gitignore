@@ -1,3 +1,6 @@
 node_modules/
 tests/live/work/
 .serena/
+# Review prompt dumps and review diffs: copies of other files (some quote stock RisuAI sources); kept local only.
+.report/**/*-agy-prompt.txt
+.report/**/*.patch

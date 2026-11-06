@@ -1,0 +1,83 @@
+# Implementation Review: storage-fix 0.2.0 Account Mode
+
+**Verdict: FIX BEFORE SHIP**
+
+---
+
+### Key Findings
+
+#### 1. Inverted candidate sort order selects the OLDEST backup by default
+* **Location:** [`src/core.js:312-315`](file:///home/cupcake/workspace/cupcake/_worktrees/rpf-review-020/src/core.js#L312-L315)
+* **Severity:** CRITICAL
+* **Failure Scenario:** 
+  In `scanHubCandidates`:
+  ```javascript
+  if (a.flushedAt !== b.flushedAt) return a.flushedAt === null ? 1 : b.flushedAt === null ? -1 : a.flushedAt - b.flushedAt;
+  ```
+  `a.flushedAt - b.flushedAt` sorts in **ascending** order (oldest first). 
+  In the panel ([`src/ui.js:308-326`](file:///home/cupcake/workspace/cupcake/_worktrees/rpf-review-020/src/ui.js#L308-L326)), the text explicitly tells the user `(맨 위가 가장 최근)` ("the top one is the most recent") and preselects `index === 0`. Because the sort is inverted, the UI preselects the **oldest** candidate. If the user accepts the default and clicks "되살리기" (recover), they silently overwrite recent plugin storage data with ancient data.
+* **Fix:** Change `a.flushedAt - b.flushedAt` to `b.flushedAt - a.flushedAt`.
+
+---
+
+#### 2. Candidate scan truncates indexes > 32KB, causing `JSON.parse` failure and candidate loss
+* **Location:** [`src/core.js:293`](file:///home/cupcake/workspace/cupcake/_worktrees/rpf-review-020/src/core.js#L293) & [`src/core.js:715`](file:///home/cupcake/workspace/cupcake/_worktrees/rpf-review-020/src/core.js#L715)
+* **Severity:** CRITICAL
+* **Failure Scenario:**
+  In `scanHubCandidates`, candidate reads call:
+  ```javascript
+  readHubIndex(run, id, { prefix: true, phase: 'scan', signal: controller.signal })
+  ```
+  This passes `prefix: true` down as `prefixOnly` to `readGzip`:
+  ```javascript
+  if (prefixOnly && accepted && total >= PREFIX_READ_LIMIT) break;
+  ```
+  `PREFIX_READ_LIMIT` is 32KB. For any real-world index whose uncompressed JSON exceeds 32KB (common with CPM logs or multiple plugins), `readGzip` truncates the payload mid-stream. In `readHubIndex`, `JSON.parse` throws `SyntaxError`, returning `{ state: 'unreadable' }`. 
+  Consequently, `scanHubCandidates` drops valid indexes > 32KB from the candidate list entirely. If all surviving historical indexes are > 32KB, the user is told "살아 있는 예전 목차는 찾지 못했어요" ("No living previous indexes found") and steered into a destructive `reset`.
+* **Fix:** In `readGzip`, do not break on `PREFIX_READ_LIMIT` if the caller needs the parsed body, or separate prefix-checking (cancelling non-index streams whose header mismatches `PREFIX_MAGIC`) from stream truncation.
+
+---
+
+#### 3. Device gate visibility state on non-fatal repair errors
+* **Location:** [`src/ui.js:504-546`](file:///home/cupcake/workspace/cupcake/_worktrees/rpf-review-020/src/ui.js#L504-L546)
+* **Severity:** MINOR
+* **Failure Scenario:**
+  When `runRepair` starts, it sets `deviceGate.hidden = true`. If repair fails with a transient network error (`ACCOUNT_UNAVAILABLE`), `showButtons([rerunButton])` is called, but `deviceGate` remains hidden. If the user clicks "다시 확인" (`runDiagnose`), diagnosis re-renders and restores `deviceGate`. However, if the error was handled inline without re-diagnosing, the gate box stays hidden. 
+* **Fix:** Ensure `deviceGate.hidden = !isAccount()` is restored if repair aborts or fails before completion.
+
+---
+
+### Judgment Point Evaluation
+
+1. **Wrong-repair paths:** **PASS (with Finding #1 fixed)**
+   - Core strictly validates settled state before edits: authoritative DB pointer === live pointer === diagnosed pointer.
+   - Refuses `local-only` correctly (`accountBroken` throws `NOT_BROKEN`).
+   - Hub 404 requires absence from `@list-keys` and a 2s recheck before being deemed missing.
+2. **False ✅:** **PASS**
+   - Authoritative DB read (`readHubDatabase`) uses `x-risu-save-date: 0`, streaming until `pluginStorage` block.
+   - Requires live pointer to be unchanged for `ACCOUNT_SAVE_SETTLE_MS` (5000ms), followed by a fresh hub read where hub pointer === live pointer, identity matches, and target index is re-verified healthy via `accountIndex` (`TARGET_GONE` guard enforced).
+3. **Network / Privacy:** **PASS**
+   - Strictly GET requests to the hub base.
+   - Auth token is only transmitted via `x-risu-auth`.
+   - `parseAccountSave` strips root fields, exposing only `account.id`. No token or credential appears in `FixError`, `AccountIssue`, or UI text. Web mode never touches `env.fetch` or `accountCache`.
+4. **Stream parser:** **PASS**
+   - Incremental `take()` handles split chunk boundaries and non-aligned block headers safely.
+   - Reader is cancelled via `finally` immediately after the `pluginStorage` block, saving bandwidth and skipping character/chat blocks.
+5. **Panel (`src/ui.js`) & User Journey:** **PASS**
+   - Device gate cannot be bypassed (checked in UI and enforced in `core.js` via `confirmDevices`).
+   - Zero references to Settings / Logout in account mode texts (strictly advises reload).
+   - Web texts and semantics remain identical to 0.1.1.
+
+---
+
+### Suite Efficacy: Uncaught Broken Implementations
+
+1. **`flushedAt` Sort Inversion (Finding #1):** Mutation tests and unit tests asserted sorting behavior on arrays with identical timestamps or tested only `flushedAt: null` being placed last, without verifying `[newest, oldest]` descending order.
+2. **Truncation of > 32KB Indexes (Finding #2):** Unit and live test mocks used small synthetic indexes (< 1KB). Neither unit tests nor the live harness evaluated an index exceeding `PREFIX_READ_LIMIT` (32KB).
+3. **Hub Index Trash Race during `accountIndex` Recheck:** In `accountIndex`, between the `@list-keys` check and the 2s sleep re-read, if a third device deletes the target via trash collection, the second 404 throws `account-unavailable` instead of detecting that deletion completed.
+
+---
+
+### Could Not Verify Here
+- Performance and HTTP keep-alive behavior against Cloudflare rate limits on `sv.risuai.xyz` when scanning accounts with > 500 coldstorage keys at `HUB_SCAN_CONCURRENCY = 4`.
+- Browser-specific behavior of `DecompressionStream` piping when the underlying `fetch` response stream emits zero-byte chunks.

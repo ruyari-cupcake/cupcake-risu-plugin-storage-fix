@@ -53,11 +53,6 @@ const RPF_STYLE = `
 `;
 
 const RPF_BACKEND_TEXT = {
-  account: [
-    'Risu 계정 저장 모드에서는 플러그인 저장소가 계정 서버에 있어요.',
-    '서버가 잠깐 응답하지 않을 때도 똑같은 오류가 나기 때문에, 이 도구는 계정 모드에서는 아무것도 바꾸지 않아요.',
-    '새로고침을 몇 번 해 보고, 시간이 지나도 계속되면 리스 개발자에게 알려 주세요.',
-  ].join('\n'),
   node: [
     '자체 서버(노드) 리스에서는 플러그인 저장소 파일이 서버에 있어서 이 도구가 확인할 수 없어요.',
     '아무것도 바꾸지 않았어요.',
@@ -76,6 +71,61 @@ const RPF_BROWSER_TEXT = {
 const RPF_ACCOUNT_HINT = '이 브라우저에서 Risu 계정 저장을 쓰다가 로그아웃했거나 동기화를 끈 흔적이 있어요. '
   + '그렇다면 최신 플러그인 데이터는 계정 쪽에 남아 있을 수 있어요 (이 도구는 계정 쪽을 확인할 수 없어요). '
   + '이 도구로 무언가를 바꾸기 전에, 설정의 Risu 계정에서 다시 로그인해 계정 데이터를 불러오는 것부터 해 보세요.';
+
+/*
+ * Account mode (Risu account sync). The tool asks the account server what stock asks it, with the login this device keeps,
+ * and changes nothing unless the server clearly says the index is gone. Advice never points at Settings → Account: with an
+ * account set, that page shows Logout, which turns account saving off (stock unMigrationAccount). Re-login happens through
+ * stock's own login box, which appears after a reload when the login is no longer accepted.
+ */
+const RPF_ACCOUNT_RELOAD_LOGIN = '리스를 새로고침해 주세요. 리스가 로그인 창을 띄우면 거기서 로그인한 뒤 이 도구를 다시 실행하면 돼요.';
+const RPF_ACCOUNT_UNAVAILABLE_PHASE = {
+  db: '계정 서버에서 저장 파일을 읽지 못했어요',
+  index: '계정 서버에서 플러그인 저장소 목차를 읽지 못했어요',
+  list: '계정 서버에서 저장된 항목 목록을 받지 못했어요',
+  scan: '계정 서버의 항목을 끝까지 확인하지 못했어요',
+};
+
+/* The panel line for each account-only state, and the buttons that go with it. Pure, so tests can check every wording. */
+function rpfAccountStatus(result) {
+  if (result.state === 'healthy') {
+    return { tone: 'ok', buttons: ['reload'], text: `✅ 계정 서버에서 지금은 플러그인 저장소 목차를 읽을 수 있어요 (값 ${result.keyCount}개).\n`
+      + '오류가 났을 때는 서버가 잠깐 응답하지 않았던 것 같아요. 새로고침하면 플러그인들이 다시 읽어 와요. 아무것도 바꾸지 않았어요.' };
+  }
+  if (result.state === 'local-only') {
+    return { tone: 'error', buttons: ['rerun'], text: '⚠ 계정 서버에는 이 플러그인 저장소 목차가 없고, 이 기기에 남아 있던 예전 사본만 있어요.\n'
+      + '그래서 이 기기에서는 읽히지만, 같은 계정의 다른 기기에서는 "Failed to load plugin storage index" 오류가 나요.\n'
+      + '이 기기에서 플러그인이 값을 한 번 저장하면 리스가 새 목차를 서버에 올려서 다른 기기도 다시 읽게 돼요 '
+      + '(크기가 큰 값은 다른 기기에서 빈 값으로 읽힐 수 있어요). 이 도구는 아무것도 바꾸지 않았어요.' };
+  }
+  if (result.state === 'account-login') {
+    return { tone: 'error', buttons: ['reload'], text: '❌ 이 기기의 Risu 계정 로그인을 계정 서버가 받아 주지 않아요.\n'
+      + `${RPF_ACCOUNT_RELOAD_LOGIN}\n로그인 창이 뜨지 않고 리스가 평소처럼 동작하면, 이 도구가 이 기기의 로그인 정보를 쓸 수 없는 상태라 확인할 수 없어요. 아무것도 바꾸지 않았어요.` };
+  }
+  if (result.state === 'account-auth-unknown') {
+    return { tone: 'error', buttons: [], text: '❌ 이 리스는 계정 서버에 다른 방식으로 로그인하고 있어서, 이 도구가 계정 서버를 확인할 수 없어요. 아무것도 바꾸지 않았어요.' };
+  }
+  if (result.state === 'account-mismatch') {
+    return { tone: 'error', buttons: ['reload', 'rerun'], text: '❌ 이 도구가 찾은 로그인 정보와 리스 저장 파일의 계정이 서로 달라요. 잘못 고칠 수 있어서 아무것도 바꾸지 않았어요.\n'
+      + RPF_ACCOUNT_RELOAD_LOGIN };
+  }
+  if (result.state === 'account-unavailable') {
+    const what = RPF_ACCOUNT_UNAVAILABLE_PHASE[result.phase] || RPF_ACCOUNT_UNAVAILABLE_PHASE.db;
+    const code = typeof result.status === 'number' ? ` (응답 ${result.status})` : '';
+    return { tone: 'error', buttons: ['rerun'], text: `❌ ${what}${code}.\n`
+      + '서버가 잠깐 바쁘거나 연결이 끊긴 것 같아요. 확인을 끝까지 하지 못하면 이 도구는 아무것도 바꾸지 않아요. 잠시 뒤 "다시 확인"을 눌러 주세요.' };
+  }
+  if (result.state === 'account-not-settled') {
+    return { tone: 'error', buttons: ['reload', 'rerun'], text: '⚠ 계정 서버에 저장된 목차 표시와 이 탭의 표시가 달라요 (다른 기기나 탭이 그사이 저장했을 수 있어요). 아무것도 바꾸지 않았어요.\n'
+      + '다른 기기와 탭의 리스를 닫고, 이 탭을 새로고침한 뒤 다시 실행해 주세요.' };
+  }
+  return null;
+}
+
+/* Every device on the account loads what this one saves, so the repair waits until the user says the others are closed. */
+const RPF_DEVICE_GATE_TEXT = '다른 기기(휴대폰·다른 컴퓨터)와 다른 탭에 열려 있는 리스를 모두 닫았어요.';
+const RPF_DEVICE_GATE_WHY = '계정 모드에서는 고친 내용이 이 계정을 쓰는 모든 기기에 반영돼요. 고치기 전에 열려 있던 다른 기기나 탭이 나중에 저장하면 '
+  + '고장 난 표시를 다시 올려서 되돌릴 수 있어요.';
 
 function rpfFormatTime(ms) {
   try {
@@ -107,17 +157,26 @@ function rpfParagraph(text, className = '') {
  * here (review round 3: a button mid-wait reads as "done" and a reload mid-save throws the save away),
  * and no ✅/⚠/❌: those mark the outcome.
  */
-function rpfWaitingDisplay({ setStatus, isAborted }) {
+/*
+ * Account mode: the same alert also appears when another DEVICE takes the account session, and a server that keeps refusing
+ * the saves (hubRejecting from the core) is named outright — waiting cannot help then.
+ */
+function rpfWaitingDisplay({ setStatus, isAborted, account = false }) {
   let shownText = '';
-  return ({ waitedMs, sinceSaveMs }) => {
+  return ({ waitedMs, sinceSaveMs, hubRejecting = false }) => {
     if (isAborted() || waitedMs < RPF_SLOW_SAVE_NOTICE_MS) return;
     const waited = Math.floor(waitedMs / 1000);
-    const text = sinceSaveMs >= RPF_SAVE_STALL_HINT_MS
-      ? `⏳ 리스 저장을 기다리는 중이에요 (${waited}초) — 큰 저장 파일은 한 번 저장하는 데 몇 분 걸리기도 해서, 그대로 두는 게 좋아요.\n`
-        + '리스가 "현재 탭이 비활성화되었습니다" 안내를 띄웠다면 이 탭은 저장을 멈춘 상태예요. 그 안내의 OK를 누르면 새로고침되니, '
-        + '그다음 이 도구를 다시 실행해 주세요 (아직 저장되지 않았다면 고장으로 나오니 한 번 더 고치면 돼요).'
+    const who = account ? '다른 탭이나 다른 기기가' : '다른 탭이';
+    const stalled = `리스가 "현재 탭이 비활성화되었습니다" 안내를 띄웠다면 ${who} 저장을 가져가서 이 탭은 저장을 멈춘 상태예요. 그 안내의 OK를 누르면 새로고침되니, `
+      + '그다음 이 도구를 다시 실행해 주세요 (아직 저장되지 않았다면 고장으로 나오니 한 번 더 고치면 돼요).';
+    let text = sinceSaveMs >= RPF_SAVE_STALL_HINT_MS
+      ? `⏳ 리스 저장을 기다리는 중이에요 (${waited}초) — 큰 저장 파일은 한 번 저장하는 데 몇 분 걸리기도 해서, 그대로 두는 게 좋아요.\n${stalled}`
       : `⏳ 리스 저장을 기다리는 중이에요 (${waited}초). 데이터베이스가 크거나 기기가 느리면 몇 분 걸리기도 해요 — `
         + '그대로 두면 저장이 끝나는 대로 완료 표시가 떠요.\n그만 기다리려면 닫기(×)를 누르세요 (바꾼 표시는 그대로예요).';
+    if (account && hubRejecting) {
+      text = `⏳ 리스 저장을 기다리는 중이에요 (${waited}초) — 리스가 저장을 보냈는데 계정 서버의 저장 파일이 바뀌지 않고 있어요.\n`
+        + `계정 서버가 저장을 받지 않는 상태예요 (${who} 계정 세션을 가져갔거나 서버 쪽 문제). ${stalled}`;
+    }
     if (text !== shownText) {
       shownText = text;
       setStatus(text);
@@ -145,6 +204,11 @@ function openFixPanel() {
       <p class="tabs">⚠ 다른 리스 탭은 모두 닫고, 이 탭을 새로고침한 직후에 실행해 주세요. 다른 탭이 열려 있으면 그 탭이 고장 난 상태를 다시 저장할 수 있어요.</p>
       <div class="status" role="status" aria-live="polite"></div>
       <div class="detail"></div>
+      <div class="alert device-gate" hidden>
+        <p class="warn">계정 모드: 고치기 전에 확인해 주세요</p>
+        <p class="device-why"></p>
+        <label class="check"><input class="devices-closed" type="checkbox"> <span class="device-text"></span></label>
+      </div>
       <div class="confirm" hidden>
         <p class="warn">초기화하기 전에 확인해 주세요</p>
         <ul class="confirm-list"></ul>
@@ -160,9 +224,11 @@ function openFixPanel() {
         <button class="reload primary" type="button" hidden>지금 새로고침</button>
         <button class="rerun" type="button" hidden>다시 확인</button>
       </div>
-      <p class="note">이 도구가 직접 바꾸는 건 리스 데이터베이스 안의 플러그인 저장소 목차 표시 하나뿐이에요. 아무것도 인터넷으로 보내지 않아요.</p>
+      <p class="note net-note">이 도구가 직접 바꾸는 건 리스 데이터베이스 안의 플러그인 저장소 목차 표시 하나뿐이에요. 아무것도 인터넷으로 보내지 않아요.</p>
     </div>`;
   document.body.appendChild(host);
+  root.querySelector('.device-why').textContent = RPF_DEVICE_GATE_WHY;
+  root.querySelector('.device-text').textContent = RPF_DEVICE_GATE_TEXT;
 
   const status = root.querySelector('.status');
   const detail = root.querySelector('.detail');
@@ -175,6 +241,10 @@ function openFixPanel() {
   const resetButton = root.querySelector('.reset');
   const reloadButton = root.querySelector('.reload');
   const rerunButton = root.querySelector('.rerun');
+  const tabsNote = root.querySelector('.tabs');
+  const netNote = root.querySelector('.net-note');
+  const deviceGate = root.querySelector('.device-gate');
+  const devicesClosed = root.querySelector('.devices-closed');
   const env = RisuPluginStorageFix.createBrowserEnv(window);
   // AbortController of the in-flight diagnose / repair, if any.
   let running = null;
@@ -185,17 +255,34 @@ function openFixPanel() {
     status.textContent = text;
     status.className = `status ${tone}`;
   };
+  const isAccount = () => Boolean(diagnosis && diagnosis.backend === 'account');
+  /* In account mode the edit buttons stay disabled until the other-devices box is ticked (the core refuses without it too). */
+  const gateOpen = () => !isAccount() || devicesClosed.checked;
+  const syncGate = () => {
+    for (const button of [recoverButton, resetButton]) button.disabled = !gateOpen();
+    doReset.disabled = !(agree.checked && gateOpen());
+  };
   const showButtons = (visible) => {
     for (const button of [recoverButton, resetButton, reloadButton, rerunButton]) {
       button.hidden = !visible.includes(button);
       button.disabled = false;
     }
     mainActions.hidden = visible.length === 0;
+    syncGate();
   };
   const closeConfirm = () => {
     confirmBox.hidden = true;
     agree.checked = false;
     doReset.disabled = true;
+  };
+  const buttonsByName = { reload: reloadButton, rerun: rerunButton };
+  const setBackendNotes = (account) => {
+    tabsNote.textContent = account
+      ? '⚠ 다른 기기(휴대폰·다른 컴퓨터)와 다른 탭의 리스는 모두 닫고, 이 탭을 새로고침한 직후에 실행해 주세요. 열려 있는 다른 기기나 탭이 고장 난 상태를 다시 저장할 수 있어요.'
+      : '⚠ 다른 리스 탭은 모두 닫고, 이 탭을 새로고침한 직후에 실행해 주세요. 다른 탭이 열려 있으면 그 탭이 고장 난 상태를 다시 저장할 수 있어요.';
+    netNote.textContent = account
+      ? '이 도구가 직접 바꾸는 건 리스 데이터베이스 안의 플러그인 저장소 목차 표시 하나뿐이에요. 계정 모드에서는 리스가 쓰는 계정 서버에, 이 기기의 로그인으로, 리스가 하는 것과 같은 읽기 요청만 보내요 (쓰기·삭제 요청은 보내지 않아요).'
+      : '이 도구가 직접 바꾸는 건 리스 데이터베이스 안의 플러그인 저장소 목차 표시 하나뿐이에요. 아무것도 인터넷으로 보내지 않아요.';
   };
   const dispose = () => {
     if (disposed) return;
@@ -215,13 +302,18 @@ function openFixPanel() {
 
   const renderCandidates = (result) => {
     const { candidates } = result;
+    const account = result.backend === 'account';
     if (result.accountHint) addAccountHint();
     if (candidates.length === 0) {
-      detail.appendChild(rpfParagraph('살아 있는 예전 목차는 찾지 못했어요. 이 목차에 있던 값들은 이 기기에서 이미 읽을 수 없는 상태예요.'
-        + ' 초기화하면 없는 목차를 가리키는 표시만 지우고, 플러그인 저장소가 새로 시작해요.'));
+      detail.appendChild(rpfParagraph(account
+        ? '계정 서버에서 살아 있는 예전 목차는 찾지 못했어요. 이 목차에 있던 값들은 이미 어느 기기에서도 읽을 수 없는 상태예요.'
+          + ' 초기화하면 없는 목차를 가리키는 표시만 지우고, 플러그인 저장소가 모든 기기에서 새로 시작해요.'
+        : '살아 있는 예전 목차는 찾지 못했어요. 이 목차에 있던 값들은 이 기기에서 이미 읽을 수 없는 상태예요.'
+          + ' 초기화하면 없는 목차를 가리키는 표시만 지우고, 플러그인 저장소가 새로 시작해요.'));
     } else {
-      detail.appendChild(rpfParagraph(`살아 있는 예전 목차(플러그인 데이터를 저장해 둔 시점)를 ${candidates.length}개 찾았어요. `
-        + '하나를 고르면 그 시점의 플러그인 데이터로 돌아가요 (맨 위가 가장 최근).'));
+      detail.appendChild(rpfParagraph(`${account ? '계정 서버에서 ' : ''}살아 있는 예전 목차(플러그인 데이터를 저장해 둔 시점)를 ${candidates.length}개 찾았어요. `
+        + '하나를 고르면 그 시점의 플러그인 데이터로 돌아가요 (맨 위가 가장 최근).'
+        + (account ? ' 고른 시점은 이 계정을 쓰는 모든 기기에 반영돼요.' : '')));
       candidates.forEach((candidate, index) => {
         const row = document.createElement('label');
         row.className = 'candidate';
@@ -234,7 +326,11 @@ function openFixPanel() {
         radio.checked = index === 0 && !result.accountHint;
         const text = document.createElement('div');
         const title = document.createElement('div');
-        title.textContent = `${rpfFormatTime(candidate.lastModified)} · 값 ${candidate.keyCount}개`;
+        /* Account candidates carry flushedAt (from the index's own trash record, device clock) instead of a file time. */
+        const when = account
+          ? (typeof candidate.flushedAt === 'number' ? `${rpfFormatTime(candidate.flushedAt)} 무렵 저장` : '저장 시점 정보 없음')
+          : rpfFormatTime(candidate.lastModified);
+        title.textContent = `${when} · 값 ${candidate.keyCount}개`;
         text.appendChild(title);
         if (candidate.sampleKeys.length > 0) {
           const keys = document.createElement('div');
@@ -246,7 +342,7 @@ function openFixPanel() {
         if (candidate.missingLarge > 0) {
           const missing = document.createElement('div');
           missing.className = 'keys error';
-          missing.textContent = `큰 값 ${candidate.largeCount}개 중 ${candidate.missingLarge}개는 파일이 없어서 빈 값으로 읽혀요. `
+          missing.textContent = `큰 값 ${candidate.largeCount}개 중 ${candidate.missingLarge}개는 ${account ? '계정 서버에 ' : ''}파일이 없어서 빈 값으로 읽혀요. `
             + '이 시점을 고르면 리스 백업 때 "불완전" 확인이 뜨거나 계정 동기화가 거절될 수 있어요 (플러그인이 그 값을 다시 저장하면 풀려요).';
           text.appendChild(missing);
         }
@@ -260,6 +356,8 @@ function openFixPanel() {
       detail.appendChild(rpfParagraph(`파일 ${result.uncertainCount}개는 확실하게 읽지 못해서 후보에서 뺐어요. `
         + '다른 리스 탭을 닫고 새로고침한 뒤 다시 확인하면 보일 수도 있어요.', 'note'));
     }
+    deviceGate.hidden = !account;
+    devicesClosed.checked = false;
   };
 
   const fillConfirm = () => {
@@ -275,9 +373,13 @@ function openFixPanel() {
       + '플러그인이 이 저장소에 넣어 두던 데이터(예: CPM 사용량 기록)는 새로 시작해요. '
       + '예전 리스 버전 방식으로 목차 밖에 따로 저장돼 있던 값이 있다면, 그 값은 그대로 다시 들어와요.');
     items.push('그대로 남는 것: 캐릭터·채팅·설정, 리스에 설치된 플러그인과 그 설정값, 플러그인의 로컬 저장소(safeLocalStorage·IndexedDB).');
-    items.push(diagnosis && diagnosis.accountHint
-      ? RPF_ACCOUNT_HINT
-      : '최근에 Risu 계정 로그아웃이나 "계정에 저장" 끄기를 했다면, 목차가 계정 쪽에 남아 있을 수도 있어요 (이 도구로는 확인할 수 없어요). 그렇다면 그쪽부터 확인해 보세요.');
+    if (isAccount()) {
+      items.push('계정 모드라서 초기화는 이 계정을 쓰는 모든 기기에 반영돼요. 다른 기기와 탭의 리스를 닫았는지 위에서 확인해 주세요.');
+    } else {
+      items.push(diagnosis && diagnosis.accountHint
+        ? RPF_ACCOUNT_HINT
+        : '최근에 Risu 계정 로그아웃이나 "계정에 저장" 끄기를 했다면, 목차가 계정 쪽에 남아 있을 수도 있어요 (이 도구로는 확인할 수 없어요). 그렇다면 그쪽부터 확인해 보세요.');
+    }
     for (const text of items) {
       const item = document.createElement('li');
       item.textContent = text;
@@ -289,6 +391,15 @@ function openFixPanel() {
     diagnosis = result;
     closeConfirm();
     detail.textContent = '';
+    deviceGate.hidden = true;
+    devicesClosed.checked = false;
+    setBackendNotes(isAccount());
+    const accountView = isAccount() ? rpfAccountStatus(result) : null;
+    if (accountView) {
+      setStatus(accountView.text, accountView.tone);
+      showButtons(accountView.buttons.map((name) => buttonsByName[name]));
+      return;
+    }
     if (result.state === 'not-risu') {
       setStatus('이 페이지에서 리스를 찾지 못했어요. 리스 탭에서, 화면이 다 뜬 뒤에 실행해 주세요.', 'error');
       showButtons([rerunButton]);
@@ -327,9 +438,13 @@ function openFixPanel() {
       showButtons([rerunButton]);
       return;
     }
-    const why = result.reason === 'unreadable'
-      ? '플러그인 저장소 목차 파일이 손상돼서 읽을 수 없어요.'
-      : '플러그인 저장소 목차 파일이 이 브라우저에 없어요.';
+    const why = isAccount()
+      ? (result.reason === 'unreadable'
+        ? '계정 서버의 플러그인 저장소 목차가 손상돼서 읽을 수 없어요.'
+        : '계정 서버에 플러그인 저장소 목차가 없어요 (이 기기에도 사본이 없어요).')
+      : (result.reason === 'unreadable'
+        ? '플러그인 저장소 목차 파일이 손상돼서 읽을 수 없어요.'
+        : '플러그인 저장소 목차 파일이 이 브라우저에 없어요.');
     setStatus(`❌ ${why}\n그래서 리스가 모든 플러그인의 저장소 요청을 거부하고 있어요 (Failed to load plugin storage index).`, 'error');
     renderCandidates(result);
     const buttons = [resetButton];
@@ -378,31 +493,52 @@ function openFixPanel() {
       }
       candidateId = picked.value;
     }
+    const account = isAccount();
+    if (account && !devicesClosed.checked) {
+      setStatus('먼저 "다른 기기와 다른 탭의 리스를 모두 닫았어요"에 체크해 주세요.', 'error');
+      return;
+    }
     const run = new AbortController();
     running = run;
     showButtons([]);
     closeConfirm();
-    setStatus('바꾸는 중… 리스가 저장을 마칠 때까지 기다려요 (보통 몇 초). 창을 닫지 마세요.');
-    const onWaiting = rpfWaitingDisplay({ setStatus, isAborted: () => run.signal.aborted });
+    deviceGate.hidden = true;
+    setStatus(account
+      ? '바꾸는 중… 리스가 계정 서버에 저장을 마칠 때까지 기다려요 (보통 몇 초). 창을 닫지 마세요.'
+      : '바꾸는 중… 리스가 저장을 마칠 때까지 기다려요 (보통 몇 초). 창을 닫지 마세요.');
+    const onWaiting = rpfWaitingDisplay({ setStatus, isAborted: () => run.signal.aborted, account });
+    const devices = { devicesClosed: account ? devicesClosed.checked : undefined };
     try {
       if (action === 'recover') {
-        await RisuPluginStorageFix.recover(env, { pointer: diagnosis.pointer, candidateId, signal: run.signal, onWaiting });
+        await RisuPluginStorageFix.recover(env, { pointer: diagnosis.pointer, candidateId, signal: run.signal, onWaiting, ...devices });
       } else {
-        await RisuPluginStorageFix.reset(env, { pointer: diagnosis.pointer, signal: run.signal, onWaiting });
+        await RisuPluginStorageFix.reset(env, { pointer: diagnosis.pointer, signal: run.signal, onWaiting, ...devices });
       }
       if (run.signal.aborted) return;
       detail.textContent = '';
       const reloadHint = '\n이 도구가 바꾼 표시는 저장까지 끝났어요. 방금 플러그인을 쓰던 중이었다면 몇 초 뒤에 새로고침해 주세요 '
         + '(플러그인이 따로 저장 중인 값까지는 이 도구가 확인할 수 없어요).'
-        + '\n브라우저가 "사이트에서 나가시겠습니까?"라고 물으면 새로고침(나가기)을 눌러 주세요.';
+        + '\n브라우저가 "사이트에서 나가시겠습니까?"라고 물으면 새로고침(나가기)을 눌러 주세요.'
+        + (account ? '\n다른 기기에서는 리스를 새로 열어 주세요 (열어 둔 창이 있으면 새로고침). 고치기 전에 열려 있던 기기가 그대로 저장하면 다시 고장 날 수 있어요 — 그러면 이 도구를 다시 실행해 주세요.' : '');
+      const where = account ? '계정 서버의 저장 파일' : '리스 저장 파일';
       setStatus((action === 'recover'
-        ? '✅ 고른 시점의 목차로 되돌리고, 리스 저장 파일에 반영된 것까지 확인했어요.\n"지금 새로고침"을 누르면 플러그인들이 되살린 데이터로 다시 시작해요.'
-        : '✅ 없는 목차 표시를 지우고, 리스 저장 파일에 반영된 것까지 확인했어요.\n"지금 새로고침"을 누르면 플러그인 저장소가 새로 시작해요.') + reloadHint, 'ok');
+        ? `✅ 고른 시점의 목차로 되돌리고, ${where}에 반영된 것까지 확인했어요.\n"지금 새로고침"을 누르면 플러그인들이 되살린 데이터로 다시 시작해요.`
+        : `✅ 없는 목차 표시를 지우고, ${where}에 반영된 것까지 확인했어요.\n"지금 새로고침"을 누르면 플러그인 저장소가 새로 시작해요.`) + reloadHint, 'ok');
       showButtons([reloadButton]);
     } catch (error) {
       if (run.signal.aborted) return;
       if (error instanceof RisuPluginStorageFix.FixError && (error.code === 'NOT_SETTLED' || error.code === 'UNCERTAIN')) {
         setStatus(`⚠ ${error.message}\n"지금 새로고침"을 누른 뒤 이 도구를 다시 실행해 주세요. "다시 확인"만 누르면 같은 상태로 다시 확인하게 돼요.`, 'error');
+        showButtons([reloadButton, rerunButton]);
+        return;
+      }
+      if (error instanceof RisuPluginStorageFix.FixError && error.code === 'TARGET_GONE') {
+        setStatus(`⚠ ${error.message}\n"지금 새로고침"을 누른 뒤 이 도구를 다시 실행해 주세요. 남아 있는 다른 시점이 있으면 다시 보여 줘요.`, 'error');
+        showButtons([reloadButton, rerunButton]);
+        return;
+      }
+      if (error instanceof RisuPluginStorageFix.FixError && error.code === 'ACCOUNT_LOGIN') {
+        setStatus(`❌ ${error.message}\n${RPF_ACCOUNT_RELOAD_LOGIN}`, 'error');
         showButtons([reloadButton, rerunButton]);
         return;
       }
@@ -420,18 +556,17 @@ function openFixPanel() {
     fillConfirm();
     confirmBox.hidden = false;
     agree.checked = false;
-    doReset.disabled = true;
+    syncGate();
   });
-  agree.addEventListener('change', () => {
-    doReset.disabled = !agree.checked;
-  });
+  agree.addEventListener('change', syncGate);
+  devicesClosed.addEventListener('change', syncGate);
   root.querySelector('.cancel-reset').addEventListener('click', closeConfirm);
   doReset.addEventListener('click', () => {
-    if (agree.checked) runRepair('reset');
+    if (agree.checked && gateOpen()) runRepair('reset');
   });
   reloadButton.addEventListener('click', () => location.reload());
 
   runDiagnose();
 }
 
-if (typeof module !== 'undefined') module.exports = { rpfWaitingDisplay, RPF_SLOW_SAVE_NOTICE_MS, RPF_SAVE_STALL_HINT_MS }; // @strip-in-bundle
+if (typeof module !== 'undefined') module.exports = { rpfWaitingDisplay, rpfAccountStatus, RPF_SLOW_SAVE_NOTICE_MS, RPF_SAVE_STALL_HINT_MS, RPF_ACCOUNT_RELOAD_LOGIN, RPF_DEVICE_GATE_TEXT, RPF_DEVICE_GATE_WHY }; // @strip-in-bundle
