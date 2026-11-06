@@ -6,7 +6,10 @@ const vm = require('node:vm');
 const { spawnSync } = require('node:child_process');
 
 const ROOT = path.join(__dirname, '..');
-const MUTANT_TIMEOUT_MS = 30000;
+// Hang watchdog per mutant, not a speed limit: the clean core suite takes ~9 s unloaded. At 30 s, a correctly KILLED
+// mutant timed out when another session's campaign loaded the shared host (load 15 on 18 cores, gate x3 2026-11-06), so
+// the bound is ~20x the measured run — an endless mutant is still caught, a busy machine no longer fails the gate.
+const MUTANT_TIMEOUT_MS = 180000;
 const OBSOLETE_SAVE_TIMEOUT_MS = 60000;
 const CORE_MUTANTS = [
   ['refuse account diagnosis', "if (selectedBackend === 'account') return await diagnoseAccount(env, storage, { signal, onProgress });", "if (selectedBackend === 'account') return { state: 'unsupported-backend', backend: 'account' }"],
