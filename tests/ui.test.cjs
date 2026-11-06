@@ -7,6 +7,7 @@ const assert = require('node:assert/strict');
 const {
   rpfWaitingDisplay, rpfAccountStatus, RPF_SLOW_SAVE_NOTICE_MS, RPF_SAVE_STALL_HINT_MS,
   RPF_ACCOUNT_RELOAD_LOGIN, RPF_DEVICE_GATE_TEXT, RPF_DEVICE_GATE_WHY,
+  rpfRepairErrorView, RPF_APPLIED_NOTE, RPF_BACKEND_TEXT, RPF_BROWSER_TEXT,
 } = require('../src/ui.js');
 
 const OTHER_TAB = '현재 탭이 비활성화되었습니다';
@@ -128,4 +129,55 @@ test('nothing is rendered after the panel was closed (aborted)', () => {
   h.abort();
   h.onWaiting({ waitedMs: 90000, sinceSaveMs: 90000 });
   assert.equal(h.status.length, 1);
+});
+
+// Review fix O2 (0.2.0): an error after the live edit (core `applied: true`) must say the tab already holds the change and
+// the save is unconfirmed — never "nothing changed" (several core messages say 변경하지 않았어요), never ✅, never Settings.
+const NO_CHANGE = /변경하지 않았어요|바꾸지 않았어요|바꾸지 않아요/;
+const coreLike = (code, message, applied) => Object.assign(new Error(message), { name: 'FixError', code, ...(applied ? { applied: true } : {}) });
+
+test('an applied repair error says the change is in the tab and unconfirmed, whatever its code and message', () => {
+  for (const code of ['ACCOUNT_LOGIN', 'ACCOUNT_MISMATCH', 'CHANGED', 'UNCERTAIN', 'NOT_SETTLED', 'SOMETHING_NEW']) {
+    const view = rpfRepairErrorView(coreLike(code, '확실하게 읽을 수 없어서 변경하지 않았어요.', true), true, 'fallback');
+    assert.ok(view.text.includes(RPF_APPLIED_NOTE), code);
+    assert.doesNotMatch(view.text, NO_CHANGE, code);
+    assert.doesNotMatch(view.text, /✅|설정|로그아웃|Logout|Settings|Account/, code);
+    assert.deepEqual(view.buttons, ['reload', 'rerun'], code);
+  }
+  const login = rpfRepairErrorView(coreLike('ACCOUNT_LOGIN', 'x', true), true, 'fallback');
+  assert.ok(login.text.includes(RPF_ACCOUNT_RELOAD_LOGIN));
+  const gone = rpfRepairErrorView(coreLike('TARGET_GONE', '되살릴 목차가 더는 서버에서 읽히지 않아요. 변경을 반복하지 않았어요.', true), true, 'fallback');
+  assert.match(gone.text, /^⚠ 되살릴 목차가/);
+  assert.ok(gone.text.includes(RPF_APPLIED_NOTE));
+  // Core also marks an UNEXPECTED error (plain Error from an adapter) that escapes after the edit (Astra delta review).
+  const plain = Object.assign(new Error('adapter broke'), { applied: true });
+  const unexpected = rpfRepairErrorView(plain, false, '예상하지 못한 오류가 났어요: adapter broke');
+  assert.match(unexpected.text, /^⚠ 예상하지 못한 오류가 났어요: adapter broke\n/);
+  assert.ok(unexpected.text.includes(RPF_APPLIED_NOTE));
+  assert.deepEqual(unexpected.buttons, ['reload', 'rerun']);
+});
+
+test('a repair error before the edit never claims the change is in the tab', () => {
+  const cases = [
+    [coreLike('NOT_SETTLED', '일치하지 않아 변경하지 않았어요.'), true, ['reload', 'rerun'], /^⚠ 일치하지 않아/],
+    [coreLike('UNCERTAIN', '읽을 수 없어서 변경하지 않았어요.'), true, ['reload', 'rerun'], /^⚠ 읽을 수 없어서/],
+    [coreLike('TARGET_GONE', '읽히지 않아요.'), true, ['reload', 'rerun'], /남아 있는 다른 시점/],
+    [coreLike('ACCOUNT_LOGIN', '로그인 확인 못함'), true, ['reload', 'rerun'], /^❌ 로그인 확인 못함/],
+    [coreLike('DEVICES_NOT_CONFIRMED', 'x'), true, ['rerun'], /^❌ fallback$/],
+    [new Error('plain'), false, ['rerun'], /^❌ fallback$/],
+    [Object.assign(new Error('plain'), { applied: false }), false, ['rerun'], /^❌ fallback$/],
+  ];
+  for (const [error, isFixError, buttons, pattern] of cases) {
+    const view = rpfRepairErrorView(error, isFixError, 'fallback');
+    assert.ok(!view.text.includes(RPF_APPLIED_NOTE), error.code);
+    assert.deepEqual(view.buttons, buttons, error.code);
+    assert.match(view.text, pattern, error.code);
+  }
+});
+
+test('refusal texts: no-fetch has its own line, self-hosted names account sync too', () => {
+  assert.match(RPF_BROWSER_TEXT.fetch, /fetch/);
+  assert.doesNotMatch(RPF_BROWSER_TEXT.fetch, /OPFS|http:\/\//);
+  assert.match(RPF_BACKEND_TEXT.node, /계정 저장을 켜 둔 경우도/);
+  assert.doesNotMatch(RPF_BACKEND_TEXT.node, /파일이 서버에 있어서/);
 });

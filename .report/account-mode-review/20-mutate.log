@@ -1,0 +1,5 @@
+
+> cupcake-risu-plugin-storage-fix@0.2.0 mutate
+> node tests/mutate.cjs
+
+KILLED   refuse account diagnosis (failing tests: 48)

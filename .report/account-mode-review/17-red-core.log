@@ -1,0 +1,1396 @@
+✔ diagnose distinguishes not-risu, not-ready, no-index, healthy, missing and unreadable without mutation (57.633358ms)
+✔ all entry points refuse node/Tauri before OPFS or IndexedDB access (3.285493ms)
+✔ candidate scan checks the prefix, full shape, ordering, samples, exclusion and missing large files (22.036891ms)
+✔ candidate prefix spans chunks and rejects a type string appearing only later without draining the stream (43.434019ms)
+✔ recover sets only the live pointer, confirms a new save and reopens exact recovered contents (33.99766ms)
+✔ reset deletes rather than nulls only the pointer, preserves references and reopens an empty index (7.816153ms)
+✔ recover/reset refuse stale diagnosis, healthy or absent pointers, and invalid candidates without changing anything (25.106984ms)
+✔ pointer/backend/cancellation races during validation are checked again before any mutation (10.595683ms)
+✔ mutation entry points report NOT_RISU and NOT_READY with Korean FixErrors (1.471686ms)
+✔ persisted pointer parses IDB and lazy OPFS, compressed and plain, ignoring decoy blocks (9.72004ms)
+✔ location selection respects OPFS flag, migrated and existing IndexedDB data (3.530534ms)
+✔ missing/foreign/damaged save files keep waiting through endless newer unreadable saves until cancellation (116.432081ms)
+✔ wait gate reads only after a strictly newer numeric backup, never trusting the live object (11.619288ms)
+▶ round2 matching disk and live state never confirm without a post-baseline backup, even long after the settle
+  ✔ idb (5.966664ms)
+  ✔ opfs (18.764118ms)
+✔ round2 matching disk and live state never confirm without a post-baseline backup, even long after the settle (25.944627ms)
+✔ wait cancellation is typed before reading, after an awaited read and after mutation (31.028808ms)
+✔ browser env is lazy, uses injected APIs and read-only IndexedDB, aborting missing-DB upgrades (4.481298ms)
+▶ round1 unsettled persisted databases refuse both edits without any mutation
+  ✔ idb recover target (4.92034ms)
+  ✔ idb recover absent (2.878092ms)
+  ✔ idb recover unknown (5.781024ms)
+  ✔ idb recover no-block (2.771172ms)
+  ✔ idb reset target (1.183645ms)
+  ✔ idb reset absent (0.856924ms)
+  ✔ idb reset unknown (0.732163ms)
+  ✔ idb reset no-block (0.895324ms)
+  ✔ opfs recover target (5.769103ms)
+  ✔ opfs recover absent (3.081812ms)
+  ✔ opfs recover unknown (3.154293ms)
+  ✔ opfs recover no-block (2.811412ms)
+  ✔ opfs reset target (1.365926ms)
+  ✔ opfs reset absent (1.101685ms)
+  ✔ opfs reset unknown (0.716803ms)
+  ✔ opfs reset no-block (0.834244ms)
+✔ round1 unsettled persisted databases refuse both edits without any mutation (42.944297ms)
+▶ round1 an initially matching disk value cannot confirm before a post-baseline save
+  ✔ idb (11.515088ms)
+  ✔ opfs (13.587416ms)
+✔ round1 an initially matching disk value cannot confirm before a post-baseline save (26.099788ms)
+▶ round1 receipt baseline is captured before the live edit, including an immediate save
+  ✔ idb recover (7.834313ms)
+  ✔ idb reset (4.448738ms)
+  ✔ opfs recover (12.979454ms)
+  ✔ opfs reset (11.638008ms)
+✔ round1 receipt baseline is captured before the live edit, including an immediate save (38.549519ms)
+▶ round1 OPFS retries after the backup name appears before database close
+  ✔ recover (8.369914ms)
+  ✔ reset (17.349832ms)
+✔ round1 OPFS retries after the backup name appears before database close (26.738391ms)
+▶ round1 IndexedDB unknown receipts retry without another backup, but retries are bounded
+  ✔ transient unknown then exact saved target (5.860344ms)
+  ✔ exhausted unknown retries rearm only on a newer backup (1.657167ms)
+✔ round1 IndexedDB unknown receipts retry without another backup, but retries are bounded (8.329235ms)
+✔ round1 a readable stale IndexedDB receipt waits for another backup, not an unannounced byte change (3.725495ms)
+▶ round1 valid successor receipts survive plugin flushes and reopen their exact contents
+  ✔ idb recover (19.30448ms)
+  ✔ idb reset (15.680225ms)
+  ✔ opfs recover (19.023839ms)
+  ✔ opfs reset (16.555468ms)
+✔ round1 valid successor receipts survive plugin flushes and reopen their exact contents (72.063338ms)
+▶ round1 unverified successors and the original dead id never confirm
+  ✔ recover missing (8.517875ms)
+  ✔ recover invalid (20.740725ms)
+  ✔ recover uncertain (13.320015ms)
+  ✔ recover dead (7.733672ms)
+  ✔ reset missing (8.284474ms)
+  ✔ reset invalid (20.947487ms)
+  ✔ reset uncertain (13.349896ms)
+  ✔ reset dead (5.972864ms)
+✔ round1 unverified successors and the original dead id never confirm (101.69838ms)
+▶ round1 uncertain index reads never scan candidates or authorize either edit
+  ✔ getFile (2.26541ms)
+  ✔ getFileNotFound (1.298885ms)
+  ✔ handleTypeMismatch (1.566246ms)
+  ✔ stream (2.178849ms)
+  ✔ badCRC (7.741512ms)
+✔ round1 uncertain index reads never scan candidates or authorize either edit (16.676789ms)
+✔ round1 uncertainty introduced while validating the candidate also refuses mutation (4.081177ms)
+▶ round1 decoded invalid indexes permit reset while uncertain candidate files are counted
+  ✔ d22619f008000000 (16.612389ms)
+  ✔ 51ed76813e000000 (15.681305ms)
+✔ round1 decoded invalid indexes permit reset while uncertain candidate files are counted (33.70534ms)
+▶ round1 unsupported browser capability states refuse scans and edits before storage access
+  ✔ opfs (1.092124ms)
+  ✔ decompression (0.534242ms)
+✔ round1 unsupported browser capability states refuse scans and edits before storage access (2.48113ms)
+✔ round1 browser capabilities are lazy getters on the injected global object (0.516642ms)
+▶ round1 createWritable capability controls both database reads and repair receipts
+  ✔ recover (9.034518ms)
+  ✔ reset (5.543503ms)
+✔ round1 createWritable capability controls both database reads and repair receipts (15.589664ms)
+▶ round1 loaded databases without a plugin storage object are no-index, not not-ready
+  ✖ undefined (3.798176ms)
+  ✖ null (2.112569ms)
+  ✖ never-used (1.714887ms)
+✖ round1 loaded databases without a plugin storage object are no-index, not not-ready (8.714276ms)
+▶ round1 preflight database reads cannot hide a live pointer, backend, health or cancellation race
+  ✔ recover pointer (9.982522ms)
+  ✔ recover backend (4.392418ms)
+  ✔ recover healed (5.267262ms)
+  ✔ recover abort (4.239417ms)
+  ✔ reset pointer (3.734335ms)
+  ✔ reset backend (12.18273ms)
+  ✔ reset healed (4.236738ms)
+  ✔ reset abort (3.615295ms)
+✔ round1 preflight database reads cannot hide a live pointer, backend, health or cancellation race (50.658649ms)
+✔ round1 accountHint reflects only dosync avoid without altering candidate selection (15.061503ms)
+▶ settle stale persisted S1 never confirms while the live store holds S2
+  ✔ idb recover (15.668665ms)
+  ✔ idb reset (12.811173ms)
+  ✔ opfs recover (28.319398ms)
+  ✔ opfs reset (30.177364ms)
+✔ settle stale persisted S1 never confirms while the live store holds S2 (88.589646ms)
+▶ settle an early matching S1 receipt cannot beat S2 inside the quiet window
+  ✔ idb recover (15.884226ms)
+  ✔ idb reset (22.611133ms)
+  ✔ opfs recover (25.748267ms)
+  ✔ opfs reset (23.311176ms)
+✔ settle an early matching S1 receipt cannot beat S2 inside the quiet window (89.140329ms)
+▶ settle idle reset normalizes deleted live undefined to saved null and confirms without another backup
+  ✔ idb (5.634343ms)
+  ✔ opfs (8.363834ms)
+✔ settle idle reset normalizes deleted live undefined to saved null and confirms without another backup (14.937702ms)
+▶ settle recovery keeps an immediate matching receipt until quiet without needing another save
+  ✔ idb (5.890464ms)
+  ✔ opfs (17.692953ms)
+✔ settle recovery keeps an immediate matching receipt until quiet without needing another save (24.644062ms)
+▶ settle continuous pointer movement with ongoing saves waits beyond a minute until cancellation without replaying the edit
+  ✔ idb recover (732.990309ms)
+  ✔ idb reset (722.011544ms)
+  ✔ opfs recover (1376.754329ms)
+  ✔ opfs reset (1348.560972ms)
+✔ settle continuous pointer movement with ongoing saves waits beyond a minute until cancellation without replaying the edit (4182.126682ms)
+▶ receipt waits beyond a minute without newer backups, whether the live pointer is idle or moving
+  ✔ idb recover moving=false (7.517311ms)
+  ✔ idb recover moving=true (38.79556ms)
+  ✔ idb reset moving=false (14.307419ms)
+  ✔ idb reset moving=true (61.816936ms)
+  ✔ opfs recover moving=false (10.801605ms)
+  ✔ opfs recover moving=true (290.660881ms)
+  ✔ opfs reset moving=false (20.307484ms)
+  ✔ opfs reset moving=true (325.358344ms)
+✔ receipt waits beyond a minute without newer backups, whether the live pointer is idle or moving (772.09235ms)
+▶ receipt confirms after a single host save takes longer than a minute and reports the late progress
+  ✔ idb (5.752784ms)
+  ✔ opfs (20.377884ms)
+✔ receipt confirms after a single host save takes longer than a minute and reports the late progress (27.129553ms)
+▶ receipt confirms across multiple host saves each spaced more than a minute apart
+  ✔ idb (9.56632ms)
+  ✔ opfs (420.084136ms)
+✔ receipt confirms across multiple host saves each spaced more than a minute apart (430.80218ms)
+▶ receipt onWaiting reports per-poll elapsed time, observed saves and restarted sinceSaveMs even when it throws
+  ✔ throws=false (6.532346ms)
+  ✔ throws=true (5.010101ms)
+✔ receipt onWaiting reports per-poll elapsed time, observed saves and restarted sinceSaveMs even when it throws (12.786333ms)
+✔ receipt a throwing onWaiting cannot end a long wait without host saves or prevent cancellation (7.099229ms)
+✔ receipt API exports no automatic timeout limits (1.485486ms)
+✔ settle a newer unknown IDB save supersedes an earlier matching receipt (2.947012ms)
+▶ settle pointer movement during asynchronous successor verification resets the quiet window
+  ✔ idb (11.154966ms)
+  ✔ opfs (59.520006ms)
+✔ settle pointer movement during asynchronous successor verification resets the quiet window (71.603415ms)
+✔ core bundles without CommonJS and still parses after full-line comments and newlines are removed (6.511267ms)
+▶ account diagnosis states bind hub identity and never expose tokens or root fields
+  ✖ no-index (4.9945ms)
+  ✔ healthy (11.024646ms)
+  ✔ local-only (10.589124ms)
+  ✔ missing (7.751112ms)
+  ✔ unreadable (5.930184ms)
+  ✔ uncertain (5.931344ms)
+  ✔ local-uncertain (5.832664ms)
+  ✔ login (1.389566ms)
+  ✔ auth-unknown (1.004244ms)
+  ✔ mismatch (6.702387ms)
+  ✔ not-settled (6.948109ms)
+  ✔ db-unavailable (2.726691ms)
+  ✔ index-unavailable (7.874673ms)
+  ✔ list-unavailable (6.936908ms)
+  ✔ network (2.787932ms)
+✖ account diagnosis states bind hub identity and never expose tokens or root fields (92.315901ms)
+✔ account token order retries only 403, pins the accepted source, and handles cache absence (12.902293ms)
+✔ account 404 requires absence from list plus a delayed second 404; no false missing on listed/reappeared keys (25.393704ms)
+✔ account RISUSAVE parser handles byte-split headers, empty gzip and truncation, stopping before chats (36.986553ms)
+✔ account candidate scan is complete, bounded, prefix-cancelled and deterministically ordered with exact metadata (41.431891ms)
+✔ account partial scans stop on any non-200 including newest 503, 429 and listed 404; abort cancels in-flight bodies (69.99957ms)
+✖ account devices gate precedes all reads; preflight errors never mutate, and each typed error is Korean (4.8483ms)
+✔ account recover/reset edit one live property, preserve references and all other hub bytes, then reopen exact contents (50.863451ms)
+✔ account torn cache and rejected-write cache never become receipts, even after many dates or a 303 (970.58669ms)
+✔ account saver writes bytes then yields before __date; the hub, not either cache half, owns confirmation (54.009944ms)
+✔ account receipt retries hub 503 without another date and rereads at settle close before a longer backoff (19.969763ms)
+✔ account foreign dead-pointer save during settle invalidates earlier matching receipt (22.240012ms)
+✖ account target deleted before final hub read raises TARGET_GONE even with a healthy local copy, without replay or rollback (24.572942ms)
+✔ account receipt accepts a freshly valid successor only after its own quiet window and ignores unverified successors (74.373268ms)
+✔ account pre-edit races recheck pointer, backend, auth source, identity and abort after yielding (37.448475ms)
+✔ web mode never fetches or opens account cache; account browser env is lazy, read-only and uses current hub (12.731093ms)
+✔ account capability, malformed list and streamed network failures stay read-only and retain typed phases (16.097467ms)
+✔ account hubRejecting requires three consecutive old-pointer dates and resets on another snapshot (37.181754ms)
+✖ account identity/auth failures after edit stop receipts without replay and never switch the accepted token (29.09724ms)
+✔ account live movement during final target validation restarts settling and requires the successor hub contents (41.720812ms)
+▶ account present non-string hub identity is a mismatch, not an absent account
+  ✔ 17 (5.794504ms)
+  ✔ false (4.277457ms)
+  ✔ {"id":"fixture-account"} (5.818464ms)
+✔ account present non-string hub identity is a mismatch, not an absent account (17.145991ms)
+▶ review C1 no-index needs an authoritative matching hub block, identity and a live recheck
+  ✖ normalized undefined (1.274125ms)
+  ✖ normalized null (1.472406ms)
+  ✖ normalized 7 (1.120484ms)
+  ✖ hub-pointer (1.668327ms)
+  ✖ live-race (1.005524ms)
+  ✖ login (1.029764ms)
+  ✖ auth-unknown (0.986484ms)
+  ✖ mismatch (1.055005ms)
+  ✖ 503 (1.022485ms)
+  ✖ no-block (0.948404ms)
+✖ review C1 no-index needs an authoritative matching hub block, identity and a live recheck (13.876097ms)
+✖ review C1 reopening an unconfirmed reset stays not-settled until the hub accepts the absent pointer (27.158912ms)
+✖ review C2 native profiles outrank account sync on every entry point without account reads (1.655087ms)
+✖ review C3 prior-account cache never authenticates a current-login diagnosis or repair (4.057337ms)
+✖ review C3 a new login after the scan invalidates the formerly accepted cache source before editing (64.641787ms)
+▶ review C4 terminal receipt failures are applied, while explicit cancellation is unchanged
+  ✖ recover backend (53.19854ms)
+  ✖ recover hub (12.346491ms)
+  ✖ recover auth-unknown (16.535628ms)
+  ✖ recover not-risu (14.255779ms)
+  ✖ recover not-ready (11.977209ms)
+  ✖ recover capability (15.409743ms)
+  ✖ recover sleep (13.848898ms)
+  ✖ recover cancel (14.026658ms)
+  ✖ reset backend (11.140566ms)
+  ✖ reset hub (8.660076ms)
+  ✖ reset auth-unknown (10.625483ms)
+  ✖ reset not-risu (11.130846ms)
+  ✖ reset not-ready (10.649244ms)
+  ✖ reset capability (10.708604ms)
+  ✖ reset sleep (11.622008ms)
+  ✖ reset cancel (11.656928ms)
+✖ review C4 terminal receipt failures are applied, while explicit cancellation is unchanged (242.11116ms)
+✖ review C5 recover and reset report complete repair-scan totals before the single live edit (14.904462ms)
+✖ review C6 account cache Uint8Array parser does not construct a whole-buffer Blob (10.380363ms)
+✔ review C7 A1 a hub read spanning the quiet boundary cannot confirm without another read started after it (22.045771ms)
+✔ review C7 A3 receipt backoff doubles to sixty seconds and resets to two seconds on a new date (34.995824ms)
+▶ review C7 post-scan rechecks independently reject unsettled DBs, healed pointers and lost candidates
+  ✖ settled (11.597408ms)
+  ✖ broken (10.202242ms)
+  ✖ target (11.836609ms)
+✖ review C7 post-scan rechecks independently reject unsettled DBs, healed pointers and lost candidates (35.151905ms)
+▶ review C7 S3 unknown root or pluginStorage compression is unavailable and cannot authorize an edit
+  ✖ root (5.444103ms)
+  ✖ pluginStorage (7.743152ms)
+✖ review C7 S3 unknown root or pluginStorage compression is unavailable and cannot authorize an edit (14.431299ms)
+ℹ tests 223
+ℹ suites 0
+ℹ pass 173
+ℹ fail 50
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 9027.17338
+
+✖ failing tests:
+
+test at tests/core.test.cjs:911:66
+✖ undefined (3.798176ms)
+  AssertionError [ERR_ASSERTION]: even never-used account storage needs a fresh hub DB read
+  
+  0 !== 1
+  
+      at TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:921:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:911:58)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core.test.cjs:911:66
+✖ null (2.112569ms)
+  AssertionError [ERR_ASSERTION]: even never-used account storage needs a fresh hub DB read
+  
+  0 !== 1
+  
+      at TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:921:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:911:58)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core.test.cjs:911:66
+✖ never-used (1.714887ms)
+  AssertionError [ERR_ASSERTION]: even never-used account storage needs a fresh hub DB read
+  
+  0 !== 1
+  
+      at TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:921:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:911:58)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core.test.cjs:1391:13
+✖ no-index (4.9945ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+  + []
+  - [
+  -   'db'
+  - ]
+  
+      at TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1420:43)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1391:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [],
+    expected: [ 'db' ],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core.test.cjs:1545:1
+✖ account devices gate precedes all reads; preflight errors never mutate, and each typed error is Korean (4.8483ms)
+  AssertionError [ERR_ASSERTION]: The validation function is expected to return "true". Received false
+  
+  Caught error:
+  
+  FixError: 진단 뒤 플러그인 저장소가 달라졌어요. 다시 진단해 주세요.
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1567:7)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: FixError: 진단 뒤 플러그인 저장소가 달라졌어요. 다시 진단해 주세요.
+        at accountLive (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/src/core.js:505:49)
+        at /home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/src/core.js:542:9
+        at withAccountRun (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/src/core.js:300:20)
+        at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+        at async editAccount (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/src/core.js:541:14)
+        at async Object.recover (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/src/core.js:876:14)
+        at async Object.run (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1370:28)
+        at async waitForActual (node:assert:646:5)
+        at async strict.rejects (node:assert:769:25)
+        at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1567:7),
+    operator: 'rejects',
+    diff: 'simple'
+  }
+
+test at tests/core.test.cjs:1681:1
+✖ account target deleted before final hub read raises TARGET_GONE even with a healthy local copy, without replay or rollback (24.572942ms)
+  AssertionError [ERR_ASSERTION]: The validation function is expected to return "true". Received false
+  
+  Caught error:
+  
+  FixError: 서버의 목차 표시는 바뀌었지만 되살릴 목차가 더는 서버에서 읽히지 않아요. 변경을 반복하지 않았어요. 다시 진단해 주세요.
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1691:3)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: FixError: 서버의 목차 표시는 바뀌었지만 되살릴 목차가 더는 서버에서 읽히지 않아요. 변경을 반복하지 않았어요. 다시 진단해 주세요.
+        at waitForAccountPersisted (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/src/core.js:627:105)
+        at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+        at async /home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/src/core.js:562:16
+        at async withAccountRun (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/src/core.js:300:14)
+        at async editAccount (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/src/core.js:541:14)
+        at async Object.recover (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/src/core.js:876:14)
+        at async Object.run (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1370:28)
+        at async waitForActual (node:assert:646:5)
+        at async strict.rejects (node:assert:769:25)
+        at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1691:3),
+    operator: 'rejects',
+    diff: 'simple'
+  }
+
+test at tests/core.test.cjs:1813:1
+✖ account identity/auth failures after edit stop receipts without replay and never switch the accepted token (29.09724ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+    Comparison {
+  -   applied: true,
+      code: 'ACCOUNT_MISMATCH'
+    }
+  
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1824:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: FixError: 이 기기의 로그인과 계정 서버의 계정이 달라서 작업을 멈췄어요.
+        at accountError (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/src/core.js:185:12)
+        at editAccount (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/src/core.js:564:29)
+        at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+        at async Object.recover (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/src/core.js:876:14)
+        at async Object.run (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1370:28)
+        at async waitForActual (node:assert:646:5)
+        at async strict.rejects (node:assert:769:25)
+        at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1824:5)
+        at async Test.run (node:internal/test_runner/test:1409:7)
+        at async Test.processPendingSubtests (node:internal/test_runner/test:974:7),
+    expected: { code: 'ACCOUNT_MISMATCH', applied: true },
+    operator: 'rejects',
+    diff: 'simple'
+  }
+
+test at tests/core.test.cjs:1868:55
+✖ normalized undefined (1.274125ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+  + []
+  - [
+  -   'db'
+  - ]
+  
+      at TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1871:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1868:47)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [],
+    expected: [ 'db' ],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core.test.cjs:1868:55
+✖ normalized null (1.472406ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+  + []
+  - [
+  -   'db'
+  - ]
+  
+      at TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1871:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1868:47)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [],
+    expected: [ 'db' ],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core.test.cjs:1868:55
+✖ normalized 7 (1.120484ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+  + []
+  - [
+  -   'db'
+  - ]
+  
+      at TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1871:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1868:47)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [],
+    expected: [ 'db' ],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core.test.cjs:1875:13
+✖ hub-pointer (1.668327ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + 'no-index'
+  - 'account-not-settled'
+  
+      at TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1886:14)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1875:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'no-index',
+    expected: 'account-not-settled',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core.test.cjs:1875:13
+✖ live-race (1.005524ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + 'no-index'
+  - 'account-not-settled'
+  
+      at TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1886:14)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1875:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'no-index',
+    expected: 'account-not-settled',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core.test.cjs:1875:13
+✖ login (1.029764ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + 'no-index'
+  - 'account-login'
+  
+      at TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1886:14)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1875:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'no-index',
+    expected: 'account-login',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core.test.cjs:1875:13
+✖ auth-unknown (0.986484ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + 'no-index'
+  - 'account-auth-unknown'
+  
+      at TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1886:14)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1875:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'no-index',
+    expected: 'account-auth-unknown',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core.test.cjs:1875:13
+✖ mismatch (1.055005ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + 'no-index'
+  - 'account-mismatch'
+  
+      at TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1886:14)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1875:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'no-index',
+    expected: 'account-mismatch',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core.test.cjs:1875:13
+✖ 503 (1.022485ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + 'no-index'
+  - 'account-unavailable'
+  
+      at TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1886:14)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1875:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'no-index',
+    expected: 'account-unavailable',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core.test.cjs:1875:13
+✖ no-block (0.948404ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + 'no-index'
+  - 'account-unavailable'
+  
+      at TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1886:14)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1875:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'no-index',
+    expected: 'account-unavailable',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core.test.cjs:1892:1
+✖ review C1 reopening an unconfirmed reset stays not-settled until the hub accepts the absent pointer (27.158912ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + 'no-index'
+  - 'account-not-settled'
+  
+      at TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1900:10)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'no-index',
+    expected: 'account-not-settled',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core.test.cjs:1907:1
+✖ review C2 native profiles outrank account sync on every entry point without account reads (1.655087ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  'account' !== 'tauri'
+  
+      at TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1914:12)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'account',
+    expected: 'tauri',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core.test.cjs:1925:1
+✖ review C3 prior-account cache never authenticates a current-login diagnosis or repair (4.057337ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + 'account-unavailable'
+  - 'broken'
+  
+      at TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1941:39)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'account-unavailable',
+    expected: 'broken',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core.test.cjs:1950:1
+✖ review C3 a new login after the scan invalidates the formerly accepted cache source before editing (64.641787ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+    Comparison {
+  +   code: 'ERR_ASSERTION'
+  -   applied: false,
+  -   code: 'CHANGED'
+    }
+  
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1955:3)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: AssertionError [ERR_ASSERTION]: receipt wait must terminate within the fixture sleep budget
+        at Object.sleep (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:145:14)
+        at waitForAccountPersisted (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/src/core.js:649:17)
+        at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+        at async /home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/src/core.js:562:16
+        at async withAccountRun (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/src/core.js:300:14)
+        at async editAccount (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/src/core.js:541:14)
+        at async Object.recover (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/src/core.js:876:14)
+        at async Object.run (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1370:28)
+        at async waitForActual (node:assert:646:5)
+        at async strict.rejects (node:assert:769:25),
+    expected: { code: 'CHANGED', applied: false },
+    operator: 'rejects',
+    diff: 'simple'
+  }
+
+test at tests/core.test.cjs:1961:13
+✖ recover backend (53.19854ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + 'CANCELLED'
+  - 'CHANGED'
+  
+      at Object.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1980:21)
+      at expectedException (node:assert:578:17)
+      at expectsError (node:assert:703:21)
+      at strict.rejects (node:assert:769:3)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1977:7)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1961:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'CANCELLED',
+    expected: 'CHANGED',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core.test.cjs:1961:13
+✖ recover hub (12.346491ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + undefined
+  - true
+  
+      at Object.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1981:16)
+      at expectedException (node:assert:578:17)
+      at expectsError (node:assert:703:21)
+      at strict.rejects (node:assert:769:3)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1977:7)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1961:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: true,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core.test.cjs:1961:13
+✖ recover auth-unknown (16.535628ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + undefined
+  - true
+  
+      at Object.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1981:16)
+      at expectedException (node:assert:578:17)
+      at expectsError (node:assert:703:21)
+      at strict.rejects (node:assert:769:3)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1977:7)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1961:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: true,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core.test.cjs:1961:13
+✖ recover not-risu (14.255779ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + undefined
+  - true
+  
+      at Object.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1981:16)
+      at expectedException (node:assert:578:17)
+      at expectsError (node:assert:703:21)
+      at strict.rejects (node:assert:769:3)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1977:7)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1961:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: true,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core.test.cjs:1961:13
+✖ recover not-ready (11.977209ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + undefined
+  - true
+  
+      at Object.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1981:16)
+      at expectedException (node:assert:578:17)
+      at expectsError (node:assert:703:21)
+      at strict.rejects (node:assert:769:3)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1977:7)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1961:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: true,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core.test.cjs:1961:13
+✖ recover capability (15.409743ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + undefined
+  - true
+  
+      at Object.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1981:16)
+      at expectedException (node:assert:578:17)
+      at expectsError (node:assert:703:21)
+      at strict.rejects (node:assert:769:3)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1977:7)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1961:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: true,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core.test.cjs:1961:13
+✖ recover sleep (13.848898ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + undefined
+  - true
+  
+      at Object.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1981:16)
+      at expectedException (node:assert:578:17)
+      at expectsError (node:assert:703:21)
+      at strict.rejects (node:assert:769:3)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1977:7)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1961:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: true,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core.test.cjs:1961:13
+✖ recover cancel (14.026658ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + undefined
+  - false
+  
+      at Object.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1981:16)
+      at expectedException (node:assert:578:17)
+      at expectsError (node:assert:703:21)
+      at strict.rejects (node:assert:769:3)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1977:7)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1961:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: false,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core.test.cjs:1961:13
+✖ reset backend (11.140566ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + 'CANCELLED'
+  - 'CHANGED'
+  
+      at Object.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1980:21)
+      at expectedException (node:assert:578:17)
+      at expectsError (node:assert:703:21)
+      at strict.rejects (node:assert:769:3)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1977:7)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1961:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'CANCELLED',
+    expected: 'CHANGED',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core.test.cjs:1961:13
+✖ reset hub (8.660076ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + undefined
+  - true
+  
+      at Object.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1981:16)
+      at expectedException (node:assert:578:17)
+      at expectsError (node:assert:703:21)
+      at strict.rejects (node:assert:769:3)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1977:7)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1961:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: true,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core.test.cjs:1961:13
+✖ reset auth-unknown (10.625483ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + undefined
+  - true
+  
+      at Object.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1981:16)
+      at expectedException (node:assert:578:17)
+      at expectsError (node:assert:703:21)
+      at strict.rejects (node:assert:769:3)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1977:7)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1961:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: true,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core.test.cjs:1961:13
+✖ reset not-risu (11.130846ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + undefined
+  - true
+  
+      at Object.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1981:16)
+      at expectedException (node:assert:578:17)
+      at expectsError (node:assert:703:21)
+      at strict.rejects (node:assert:769:3)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1977:7)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1961:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: true,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core.test.cjs:1961:13
+✖ reset not-ready (10.649244ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + undefined
+  - true
+  
+      at Object.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1981:16)
+      at expectedException (node:assert:578:17)
+      at expectsError (node:assert:703:21)
+      at strict.rejects (node:assert:769:3)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1977:7)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1961:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: true,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core.test.cjs:1961:13
+✖ reset capability (10.708604ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + undefined
+  - true
+  
+      at Object.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1981:16)
+      at expectedException (node:assert:578:17)
+      at expectsError (node:assert:703:21)
+      at strict.rejects (node:assert:769:3)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1977:7)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1961:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: true,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core.test.cjs:1961:13
+✖ reset sleep (11.622008ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + undefined
+  - true
+  
+      at Object.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1981:16)
+      at expectedException (node:assert:578:17)
+      at expectsError (node:assert:703:21)
+      at strict.rejects (node:assert:769:3)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1977:7)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1961:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: true,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core.test.cjs:1961:13
+✖ reset cancel (11.656928ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + undefined
+  - false
+  
+      at Object.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1981:16)
+      at expectedException (node:assert:578:17)
+      at expectsError (node:assert:703:21)
+      at strict.rejects (node:assert:769:3)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1977:7)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1961:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: false,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core.test.cjs:1990:1
+✖ review C5 recover and reset report complete repair-scan totals before the single live edit (14.904462ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+  + []
+  - [
+  -   [
+  -     0,
+  -     2
+  -   ],
+  -   [
+  -     1,
+  -     2
+  -   ],
+  -   [
+  -     2,
+  -     2
+  -   ]
+  - ]
+  
+      at /home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1994:28
+      at Object.set (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:79:92)
+      at /home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/src/core.js:560:46
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async withAccountRun (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/src/core.js:300:14)
+      at async editAccount (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/src/core.js:541:14)
+      at async Object.recover (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/src/core.js:876:14)
+      at async Object.run (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1370:28)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1996:22)
+      at async Test.run (node:internal/test_runner/test:1409:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [],
+    expected: [ [ 0, 2 ], [ 1, 2 ], [ 2, 2 ] ],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core.test.cjs:2002:1
+✖ review C6 account cache Uint8Array parser does not construct a whole-buffer Blob (10.380363ms)
+  AssertionError [ERR_ASSERTION]: cache must parse, not silently fall back
+      at TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:2014:10)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at tests/core.test.cjs:2047:66
+✖ settled (11.597408ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+    Comparison {
+  -   applied: false,
+      code: 'NOT_SETTLED'
+    }
+  
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:2059:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:2047:58)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: FixError: 현재 탭과 저장 파일의 목차 표시가 일치하지 않아 변경하지 않았어요. 다른 리스 탭을 닫고 새로고침한 뒤 다시 실행해 주세요.
+        at accountSettled (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/src/core.js:520:42)
+        at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+        at async /home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/src/core.js:549:9
+        at async withAccountRun (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/src/core.js:300:14)
+        at async editAccount (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/src/core.js:541:14)
+        at async Object.recover (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/src/core.js:876:14)
+        at async Object.run (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1370:28)
+        at async waitForActual (node:assert:646:5)
+        at async strict.rejects (node:assert:769:25)
+        at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:2059:5),
+    expected: { code: 'NOT_SETTLED', applied: false },
+    operator: 'rejects',
+    diff: 'simple'
+  }
+
+test at tests/core.test.cjs:2047:66
+✖ broken (10.202242ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+    Comparison {
+  -   applied: false,
+      code: 'NOT_BROKEN'
+    }
+  
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:2059:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:2047:58)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: FixError: 현재 플러그인 저장소는 없는 목차를 가리키고 있지 않아요. 변경하지 않았어요.
+        at accountBroken (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/src/core.js:513:78)
+        at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+        at async /home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/src/core.js:550:9
+        at async withAccountRun (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/src/core.js:300:14)
+        at async editAccount (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/src/core.js:541:14)
+        at async Object.recover (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/src/core.js:876:14)
+        at async Object.run (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1370:28)
+        at async waitForActual (node:assert:646:5)
+        at async strict.rejects (node:assert:769:25)
+        at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:2059:5),
+    expected: { code: 'NOT_BROKEN', applied: false },
+    operator: 'rejects',
+    diff: 'simple'
+  }
+
+test at tests/core.test.cjs:2047:66
+✖ target (11.836609ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+    Comparison {
+  -   applied: false,
+      code: 'CANDIDATE_INVALID'
+    }
+  
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:2059:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:2047:58)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: FixError: 되살릴 목차를 다시 읽을 수 없어요. 다시 진단해 주세요.
+        at accountTarget (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/src/core.js:527:43)
+        at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+        at async /home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/src/core.js:551:25
+        at async withAccountRun (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/src/core.js:300:14)
+        at async editAccount (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/src/core.js:541:14)
+        at async Object.recover (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/src/core.js:876:14)
+        at async Object.run (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1370:28)
+        at async waitForActual (node:assert:646:5)
+        at async strict.rejects (node:assert:769:25)
+        at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:2059:5),
+    expected: { code: 'CANDIDATE_INVALID', applied: false },
+    operator: 'rejects',
+    diff: 'simple'
+  }
+
+test at tests/core.test.cjs:2067:57
+✖ root (5.444103ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+    Comparison {
+  -   applied: false,
+      code: 'ACCOUNT_UNAVAILABLE'
+    }
+  
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:2075:48)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:2067:49)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: FixError: 계정 서버를 확실하게 읽을 수 없어요. 잠시 뒤 다시 확인해 주세요.
+        at accountError (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/src/core.js:185:12)
+        at editAccount (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/src/core.js:564:29)
+        at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+        at async Object.recover (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/src/core.js:876:14)
+        at async Object.run (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1370:28)
+        at async waitForActual (node:assert:646:5)
+        at async strict.rejects (node:assert:769:25)
+        at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:2075:48)
+        at async Test.run (node:internal/test_runner/test:1409:7)
+        at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:2067:49),
+    expected: { code: 'ACCOUNT_UNAVAILABLE', applied: false },
+    operator: 'rejects',
+    diff: 'simple'
+  }
+
+test at tests/core.test.cjs:2067:57
+✖ pluginStorage (7.743152ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+    Comparison {
+  -   applied: false,
+      code: 'ACCOUNT_UNAVAILABLE'
+    }
+  
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:2075:48)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:2067:49)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: FixError: 계정 서버를 확실하게 읽을 수 없어요. 잠시 뒤 다시 확인해 주세요.
+        at accountError (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/src/core.js:185:12)
+        at editAccount (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/src/core.js:564:29)
+        at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+        at async Object.recover (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/src/core.js:876:14)
+        at async Object.run (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:1370:28)
+        at async waitForActual (node:assert:646:5)
+        at async strict.rejects (node:assert:769:25)
+        at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:2075:48)
+        at async Test.run (node:internal/test_runner/test:1409:7)
+        at async TestContext.<anonymous> (/home/cupcake/workspace/cupcake/cupcake-risu-plugin-storage-fix/tests/core.test.cjs:2067:49),
+    expected: { code: 'ACCOUNT_UNAVAILABLE', applied: false },
+    operator: 'rejects',
+    diff: 'simple'
+  }

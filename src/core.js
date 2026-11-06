@@ -63,6 +63,7 @@ const RisuPluginStorageFix = (() => {
       super(message);
       this.name = 'FixError';
       this.code = code;
+      this.applied = false;
     }
   }
 
@@ -154,9 +155,9 @@ const RisuPluginStorageFix = (() => {
   }
 
   function backend(env) {
-    if (env.localStorage.getItem('accountst') === 'able') return 'account';
-    if (env.isNode) return 'node';
     if (env.isTauri) return 'tauri';
+    if (env.isNode) return 'node';
+    if (env.localStorage.getItem('accountst') === 'able') return 'account';
     return 'web';
   }
 
@@ -193,7 +194,9 @@ const RisuPluginStorageFix = (() => {
   /* Both cache and hub use the same incremental RISUSAVE reader. Skip unrelated payloads,
      discard the root after extracting identity, and cancel before character/chat blocks. */
   async function parseAccountSave(env, source, signal, rootOnly = false) {
-    const stream = source instanceof Uint8Array ? new Blob([source]).stream() : source;
+    const stream = source instanceof Uint8Array ? new ReadableStream({
+      start(controller) { controller.enqueue(source); controller.close(); },
+    }) : source;
     const reader = stream.getReader();
     let pending = new Uint8Array();
     let cursor = 0;
@@ -282,6 +285,8 @@ const RisuPluginStorageFix = (() => {
     } catch (error) { throwIfCancelled(signal); }
     try {
       const fallback = credentials(JSON.parse(env.localStorage.getItem('fallbackRisuToken')));
+      /* Stock Logout keeps the old cache; a different current login owns this run. */
+      if (fallback && sources[0]?.id !== fallback.id) sources.length = 0;
       if (fallback) sources.push({ ...fallback, source: 'fallback' });
     } catch (error) {}
     throwIfCancelled(signal);
@@ -474,14 +479,15 @@ const RisuPluginStorageFix = (() => {
   }
 
   async function diagnoseAccount(env, storage, { signal, onProgress }) {
-    const pointer = storage?.[POINTER_KEY];
-    if (typeof pointer !== 'string') return { state: 'no-index', backend: 'account' };
+    const pointer = typeof storage?.[POINTER_KEY] === 'string' ? storage[POINTER_KEY] : null;
     try {
       return await withAccountRun(env, signal, async (run) => {
         const saved = await readHubDatabase(run);
-        if (saved.pointer !== pointer || liveStorage(env)?.[POINTER_KEY] !== pointer) {
+        const livePointer = liveStorage(env)?.[POINTER_KEY];
+        if (saved.pointer !== pointer || (typeof livePointer === 'string' ? livePointer : null) !== pointer) {
           return { state: 'account-not-settled', backend: 'account', pointer };
         }
+        if (pointer === null) return { state: 'no-index', backend: 'account' };
         const current = await accountIndex(run, pointer);
         if (current.state === 'healthy' || current.state === 'local-only') {
           return { state: current.state, backend: 'account', pointer, keyCount: current.index.entries.length };
@@ -536,13 +542,14 @@ const RisuPluginStorageFix = (() => {
     if (devicesClosed !== true) throw new FixError('DEVICES_NOT_CONFIRMED');
   }
 
-  async function editAccount(env, { pointer, candidateId, signal, onWaiting }, recovering) {
+  async function editAccount(env, { pointer, candidateId, signal, onWaiting, onProgress }, recovering) {
+    let applied = false;
     try {
       return await withAccountRun(env, signal, async (run) => {
         accountLive(run, pointer);
         await accountSettled(run, pointer);
         await accountBroken(run, pointer);
-        await scanHubCandidates(run, { excludeId: pointer });
+        await scanHubCandidates(run, { excludeId: pointer, onProgress });
         if (recovering) await accountTarget(run, candidateId, pointer);
         /* Re-read across the scan/candidate awaits: neither a stale auth source nor a
            foreign save may authorize the live edit. The baseline belongs before it. */
@@ -559,9 +566,15 @@ const RisuPluginStorageFix = (() => {
         const target = recovering ? candidateId : null;
         if (recovering) storage[POINTER_KEY] = target;
         else delete storage[POINTER_KEY];
+        applied = true;
         return await waitForAccountPersisted(run, { signal: run.signal, onWaiting, baseline, editedAt, target, deadPointer: pointer });
       });
-    } catch (error) { throw accountError(error); }
+    } catch (error) {
+      const failure = accountError(error);
+      /* Preserve the live-edit boundary after mapping transport issues to public errors. */
+      if (applied && failure.code !== 'CANCELLED') failure.applied = true;
+      throw failure;
+    }
   }
 
   /* Triggered by cache dates, settle close, or capped exponential backoff. Each acceptance
@@ -870,10 +883,10 @@ const RisuPluginStorageFix = (() => {
     return (await readIndex(env, root, saved, signal)).state === 'healthy';
   }
 
-  async function recover(env, { pointer, candidateId, signal, onWaiting, devicesClosed } = {}) {
+  async function recover(env, { pointer, candidateId, signal, onWaiting, onProgress, devicesClosed } = {}) {
     if (backend(env) === 'account') {
       confirmDevices(devicesClosed);
-      return await editAccount(env, { pointer, candidateId, signal, onWaiting }, true);
+      return await editAccount(env, { pointer, candidateId, signal, onWaiting, onProgress }, true);
     }
     const { root } = await checkBroken(env, pointer, signal);
     if (typeof candidateId !== 'string' || candidateId === pointer) throw new FixError('CANDIDATE_INVALID');
@@ -888,10 +901,10 @@ const RisuPluginStorageFix = (() => {
       { signal, onWaiting, location, baseline, editedAt });
   }
 
-  async function reset(env, { pointer, signal, onWaiting, devicesClosed } = {}) {
+  async function reset(env, { pointer, signal, onWaiting, onProgress, devicesClosed } = {}) {
     if (backend(env) === 'account') {
       confirmDevices(devicesClosed);
-      return await editAccount(env, { pointer, signal, onWaiting }, false);
+      return await editAccount(env, { pointer, signal, onWaiting, onProgress }, false);
     }
     const { root, location, baseline } = await prepareEdit(env, pointer, signal);
     const storage = checkLive(env, pointer, signal);

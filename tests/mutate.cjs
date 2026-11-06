@@ -105,7 +105,7 @@ CORE_MUTANTS.push(
   ['account candidates reverse id ties', '(a.id < b.id ? -1 : a.id > b.id ? 1 : 0)', '(a.id < b.id ? 1 : a.id > b.id ? -1 : 0)'],
   ['account candidates lose missing large references', 'missingLarge: largeRows.filter((item) => !names.has(item.l)).length', 'missingLarge: 0'],
   ['account preflight skips fresh settled check', "if (saved.pointer !== pointer) throw new FixError('NOT_SETTLED');", ''],
-  ['account preflight skips complete scan', 'await scanHubCandidates(run, { excludeId: pointer });', ''],
+  ['account preflight skips complete scan', 'await accountBroken(run, pointer);\n        await scanHubCandidates(run, { excludeId: pointer, onProgress });', 'await accountBroken(run, pointer);'],
   ['account preflight ignores changed auth source', "if (!currentSources.some((item) => item.source === run.accepted.source && item.id === run.accepted.id && item.token === run.accepted.token)) {", 'if (false) {'],
   ['account edits uncertain pointer', "if (!['missing', 'unreadable'].includes(current.state)) throw new FixError('UNCERTAIN');", ''],
   ['account overwrites healthy hub index', "if (current.state === 'healthy' || current.state === 'local-only') throw new FixError('NOT_BROKEN');", ''],
@@ -126,6 +126,26 @@ CORE_MUTANTS.push(
   ['account hubRejecting shown before three saves', 'hubRejecting: rejected >= HUB_REJECT_HINT_SAVES', 'hubRejecting: rejected >= 2'],
   ['account hubRejecting never shown', 'hubRejecting: rejected >= HUB_REJECT_HINT_SAVES', 'hubRejecting: false'],
   ['account hubRejecting does not reset', 'if (newDate) rejected = snapshot.pointer === deadPointer ? rejected + 1 : 0;', 'if (newDate && snapshot.pointer === deadPointer) rejected += 1;'],
+  ['account no-index skips authoritative hub read', "const pointer = typeof storage?.[POINTER_KEY] === 'string' ? storage[POINTER_KEY] : null;", "const pointer = typeof storage?.[POINTER_KEY] === 'string' ? storage[POINTER_KEY] : null; if (pointer === null) return { state: 'no-index', backend: 'account' };"],
+  ['account no-index compares undefined with null', "(typeof livePointer === 'string' ? livePointer : null) !== pointer", 'livePointer !== pointer'],
+  ['account sync outranks native profiles', "if (env.isTauri) return 'tauri';\n    if (env.isNode) return 'node';\n    if (env.localStorage.getItem('accountst') === 'able') return 'account';", "if (env.localStorage.getItem('accountst') === 'able') return 'account';\n    if (env.isNode) return 'node';\n    if (env.isTauri) return 'tauri';"],
+  ['account keeps prior-account cached credentials', 'if (fallback && sources[0]?.id !== fallback.id) sources.length = 0;', ''],
+  ['account post-edit failure loses applied flag', "if (applied && failure.code !== 'CANCELLED') failure.applied = true;", ''],
+  ['account pre-edit errors claim applied', 'this.applied = false;', 'this.applied = true;'],
+  ['account cancellation claims applied', "if (applied && failure.code !== 'CANCELLED') failure.applied = true;", 'if (applied) failure.applied = true;'],
+  ['account recover loses scan progress', 'return await editAccount(env, { pointer, candidateId, signal, onWaiting, onProgress }, true);', 'return await editAccount(env, { pointer, candidateId, signal, onWaiting }, true);'],
+  ['account reset loses scan progress', 'return await editAccount(env, { pointer, signal, onWaiting, onProgress }, false);', 'return await editAccount(env, { pointer, signal, onWaiting }, false);'],
+  ['account repair scan drops progress', 'await accountBroken(run, pointer);\n        await scanHubCandidates(run, { excludeId: pointer, onProgress });', 'await accountBroken(run, pointer);\n        await scanHubCandidates(run, { excludeId: pointer });'],
+  ['account cache parser copies into Blob', 'const stream = source instanceof Uint8Array ? new ReadableStream({\n      start(controller) { controller.enqueue(source); controller.close(); },\n    }) : source;', 'const stream = source instanceof Uint8Array ? new Blob([source]).stream() : source;'],
+  ['account receipt accepts a read started before settling', '&& readStarted - quietSince >= ACCOUNT_SAVE_SETTLE_MS', ''],
+  ['account receipt trusts a healthy local target copy', "if (!localFallback) return { state: 'missing' };", ''],
+  ['account receipt uses constant retry spacing', 'backoff = Math.min(HUB_RECHECK_MAX_MS, backoff * 2);', 'backoff = HUB_RECHECK_BACKOFF_MS;'],
+  ['account receipt retry spacing has no cap', 'backoff = Math.min(HUB_RECHECK_MAX_MS, backoff * 2);', 'backoff *= 2;'],
+  ['account receipt retry spacing ignores new date', 'saveSeenAt = env.now();\n        backoff = HUB_RECHECK_BACKOFF_MS;', 'saveSeenAt = env.now();'],
+  ['account post-scan skips settled recheck', 'await accountSettled(run, pointer);\n        await accountBroken(run, pointer);\n        if (recovering) await accountTarget(run, candidateId, pointer);', 'await accountBroken(run, pointer);\n        if (recovering) await accountTarget(run, candidateId, pointer);'],
+  ['account post-scan skips broken recheck', 'await accountSettled(run, pointer);\n        await accountBroken(run, pointer);\n        if (recovering) await accountTarget(run, candidateId, pointer);', 'await accountSettled(run, pointer);\n        if (recovering) await accountTarget(run, candidateId, pointer);'],
+  ['account post-scan skips target recheck', 'if (recovering) await accountTarget(run, candidateId, pointer);\n        const currentSources', 'const currentSources'],
+  ['account parser accepts unknown compression', "else if (compression !== 0) throw new Error('알 수 없는 압축 형식');", ''],
 );
 
 /* The waiting line is the user's only view of a receipt that never gives up on its own (0.1.1). */
@@ -135,6 +155,11 @@ const UI_MUTANTS = [
   ['waiting line renders after close', 'if (isAborted() || waitedMs < RPF_SLOW_SAVE_NOTICE_MS) return;', 'if (waitedMs < RPF_SLOW_SAVE_NOTICE_MS) return;'],
   ['waiting line re-renders every poll', 'if (text !== shownText) {', 'if (true) {'],
   ['waiting line from the first poll', 'if (isAborted() || waitedMs < RPF_SLOW_SAVE_NOTICE_MS) return;', 'if (isAborted()) return;'],
+  /* After-the-edit errors (0.2.0 review O2 + Astra delta): the panel must say the change is in the tab, for any error class. */
+  ['applied honoured only for FixError', 'if (error && error.applied === true) {', 'if (isFixError && error.applied === true) {'],
+  ['every repair error claims applied', 'if (error && error.applied === true) {', 'if (error) {'],
+  ['applied error shows the core message', "const reason = RPF_APPLIED_REASON[code] || (isFixError ? '계정 서버에서 고친 결과를 확실하게 읽지 못했어요.' : fallbackText);", 'const reason = error.message;'],
+  ['applied note dropped', 'text: `⚠ ${reason}\\n${RPF_APPLIED_NOTE}\\n${again}`', 'text: `⚠ ${reason}\\n${again}`'],
 ];
 const SUITES = [
   { file: 'src/core.js', test: 'tests/core.test.cjs', mutants: CORE_MUTANTS },

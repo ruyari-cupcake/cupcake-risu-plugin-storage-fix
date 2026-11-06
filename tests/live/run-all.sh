@@ -25,7 +25,7 @@ LOCAL_CONSOLE=1 step node tests/live/drive.mjs reset loader
 if [ "${SKIP_HOSTED_SITE:-0}" != "1" ]; then
   BASE_URL=https://risuai.xyz/ LOCAL_CONSOLE=1 step node tests/live/drive.mjs reset loader
   # Account mode runs on the official site with the TEST account (RPF_ACCOUNT_ENV; see account-live.mjs).
-  for account_scenario in account-recover account-reset account-unavailable account-login account-local-only; do
+  for account_scenario in account-recover account-reset account-reset-rejected account-unavailable account-login account-local-only; do
     BASE_URL=https://risuai.xyz/ step node tests/live/drive.mjs "$account_scenario" bookmarklet
   done
 fi

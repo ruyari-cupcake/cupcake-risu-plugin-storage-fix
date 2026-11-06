@@ -26,7 +26,7 @@ export async function hubSession() {
   const match = /"token":"([0-9a-f-]+)"/.exec(await res.text());
   if (!match) throw new Error('HUB_LOGIN_FAILED');
   const auth = { 'x-risu-auth': match[1], 'User-Agent': 'Mozilla/5.0 (rpf live harness)' };
-  const call = (method, headers, body) => fetch(`${HUB}/hub/account/coldstorage`, { method, headers: { ...auth, ...headers }, body });
+  const call = (method, headers, body) => fetch(`${HUB}/hub/account/coldstorage`, { method, cache: 'no-store', headers: { ...auth, ...headers }, body });
   return {
     async list() {
       const r = await call('GET', { 'x-risu-key': '@list-keys' });
@@ -156,9 +156,25 @@ export async function waitHubSaved(page, { until }, ms = 120000) {
     const hub = await hubPointer(page);
     const live = await livePointer(page);
     last = { hub, live };
-    return hub.status === 200 && hub.pointer === live;
+    // Only a whole pluginStorage block counts: a torn read and "no pointer" both read as null otherwise.
+    return hub.status === 200 && hub.hasBlock === true && hub.pointer === live;
   }, ms);
   return last;
+}
+
+// The hub refuses stock's DATABASE save (POST /api/account/write with x-risu-key database/database.bin,
+// accountStorage.ts setItem; every other key and request passes). Stock still writes its local cache + __date first, which
+// is exactly why the tool never takes those as a receipt. Returns a counter (to prove stock really tried) and the undo.
+export async function rejectHubDatabaseWrites(context) {
+  const url = `${HUB}/api/account/write`;
+  const counter = { rejected: 0 };
+  await context.route(url, (route) => {
+    const request = route.request();
+    if (request.method() !== 'POST' || request.headers()['x-risu-key'] !== DB_KEY) return route.continue();
+    counter.rejected += 1;
+    return route.fulfill({ status: 503, headers: { 'access-control-allow-origin': '*' }, body: 'unavailable' });
+  });
+  return { counter, allow: () => context.unroute(url) };
 }
 
 // A routed hub failure for the tool's requests AND stock's (both are page fetches): every coldstorage GET answers `status`.

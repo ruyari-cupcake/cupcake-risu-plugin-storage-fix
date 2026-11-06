@@ -10,7 +10,17 @@
 - Account repairs need the "other devices and tabs are closed" box (the change reaches every device on the account), and
   ✅ appears only after a fresh read of the account server's own save file shows the repaired pointer and the recovered
   index still readable there — the device cache is never trusted (RisuAI updates it even when the server rejects a save).
-- Any incomplete server check (an item that does not answer, 404 included) offers no recover or reset.
+- Any incomplete server check (an item that does not answer, 404 included) offers no recover or reset; the repair button
+  re-checks every server item first and shows the same n/N count as the diagnosis.
+- "Healthy, nothing stored yet" in account mode also needs the server's save file to hold no pointer: a tab whose pointer
+  is gone while the server still names the dead one (a reset whose save the server refused) is reported as not settled,
+  never ✅.
+- Self-hosted (node) RisuAI and the desktop app stay refused even with account sync on (the desktop app writes its save
+  file inside the app in account mode too).
+- A login left in the device cache by a previous account (RisuAI's logout keeps that cache) is never used when this
+  device's current login names another account.
+- If the login is refused, the server's file turns into another account's, or the chosen index vanishes AFTER the change
+  was made, the panel says the change is already in this tab and the server save is unconfirmed (reload, run again).
 
 ## 0.1.1 — 2026-11-03
 

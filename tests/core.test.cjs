@@ -168,6 +168,7 @@ function fixture({ storage = { _coldpluginIndex: 'dead' }, location = 'idb', fla
       cancellation = { at: clock + ms, controller };
       return controller.signal;
     },
+    advanceClock(ms) { clock += ms; },
     onSleep(fn) { onSleep = fn; }, onFile(fn) { onFile = fn; }, onWrite(fn) { onWrite = fn; } };
 }
 
@@ -914,9 +915,10 @@ test('round1 loaded databases without a plugin storage object are no-index, not 
     for (const method of ['recover', 'reset']) await assert.rejects(core[method](f.env, { pointer: 'dead', candidateId: 'good' }), { code: 'NOT_BROKEN' });
     assert.equal(f.calls.root, 0);
     assert.equal(f.calls.keys, 0);
-    f.local.set('accountst', 'able');
-    f.env.fetch = async () => assert.fail('no-index account must not request');
-    assert.deepEqual(await core.diagnose(f.env), { state: 'no-index', backend: 'account' });
+    const account = accountFixture({ storage: {} });
+    account.env.pluginApis = f.env.pluginApis;
+    assert.deepEqual(await account.run(), { state: 'no-index', backend: 'account' });
+    assert.equal(account.requests.length, 1, 'even never-used account storage needs a fresh hub DB read');
   });
 });
 
@@ -1415,7 +1417,8 @@ test('account diagnosis states bind hub identity and never expose tokens or root
         assert.equal(result.status, { 'db-unavailable': 303, 'index-unavailable': 429, 'list-unavailable': 503, network: null }[scenario]);
         assert.equal(result.phase, { 'db-unavailable': 'db', 'index-unavailable': 'index', 'list-unavailable': 'list', network: 'db' }[scenario]);
       }
-      if (['no-index', 'login', 'auth-unknown'].includes(scenario)) assert.equal(f.requests.length, 0);
+      if (scenario === 'no-index') assert.deepEqual(f.requests.map((r) => r.kind), ['db']);
+      if (['login', 'auth-unknown'].includes(scenario)) assert.equal(f.requests.length, 0);
       assert.deepEqual(f.calls.writes, []);
     });
   }
@@ -1562,7 +1565,7 @@ test('account devices gate precedes all reads; preflight errors never mutate, an
         login: 'ACCOUNT_LOGIN', unavailable: 'ACCOUNT_UNAVAILABLE', mismatch: 'ACCOUNT_MISMATCH', 'auth-unknown': 'UNCERTAIN', partial: 'ACCOUNT_UNAVAILABLE' }[variant];
       const before = f.calls.writes.slice();
       await assert.rejects(f.run(method, { pointer: 'dead', candidateId: 'good', devicesClosed: true, signal: f.cancelAfter(8000) }), (error) =>
-        error.code === expected && /[가-힣]/.test(error.message));
+        error.code === expected && error.applied === false && /[가-힣]/.test(error.message));
       assert.deepEqual(f.calls.writes, before);
     }
   }
@@ -1675,8 +1678,9 @@ test('account foreign dead-pointer save during settle invalidates earlier matchi
   assert.equal(stockSaveView(f.hub.bytes).storage._coldpluginIndex, 'dead');
 });
 
-test('account target deleted before final hub read raises TARGET_GONE without replay or rollback', async () => {
+test('account target deleted before final hub read raises TARGET_GONE even with a healthy local copy, without replay or rollback', async () => {
   const f = accountFixture(); f.put('good', index()); let editedAt;
+  f.add('good', index([{ k: 'local-copy', s: '{"preserved":true}' }]));
   f.onWrite(() => { editedAt = f.env.now(); });
   f.onSleep(async () => {
     if (editedAt === undefined) return;
@@ -1685,7 +1689,7 @@ test('account target deleted before final hub read raises TARGET_GONE without re
     if (elapsed === 4500) f.hub.cold.delete('good');
   });
   await assert.rejects(f.run('recover', { pointer: 'dead', candidateId: 'good', devicesClosed: true, signal: f.cancelAfter(15000) }), (error) =>
-    error.code === 'TARGET_GONE' && /[가-힣]/.test(error.message));
+    error.code === 'TARGET_GONE' && error.applied === true && /[가-힣]/.test(error.message));
   assert.deepEqual(f.calls.writes, [['set', '_coldpluginIndex', 'good']]);
   assert.equal(f.live._coldpluginIndex, 'good');
 });
@@ -1818,7 +1822,7 @@ test('account identity/auth failures after edit stop receipts without replay and
     });
     f.onRequest((r) => r.kind === 'db' && editedAt !== undefined && variant === '403' ? { status: 403 } : undefined);
     await assert.rejects(f.run('recover', { pointer: 'dead', candidateId: 'good', devicesClosed: true,
-      signal: f.cancelAfter(12000) }), { code: variant === 'identity' ? 'ACCOUNT_MISMATCH' : 'ACCOUNT_LOGIN' });
+      signal: f.cancelAfter(12000) }), { code: variant === 'identity' ? 'ACCOUNT_MISMATCH' : 'ACCOUNT_LOGIN', applied: true });
     assert.deepEqual(f.calls.writes, [['set', '_coldpluginIndex', 'good']]);
     assert.ok(f.requests.every((r) => r.init.headers['x-risu-auth'] === ACCOUNT_TOKEN));
   }
@@ -1852,6 +1856,223 @@ test('account present non-string hub identity is a mismatch, not an absent accou
     f.hub.bytes = accountSave({ _coldpluginIndex: 'dead' }, { account: { id: identity, token: ROOT_SECRET } });
     f.put('dead', index());
     assert.deepEqual(await f.run(), { state: 'account-mismatch', backend: 'account' });
+    assert.deepEqual(f.calls.writes, []);
+  });
+});
+
+/* Review-fix attack map: force hub/live disagreement on no-index (not merely a request count),
+   native flags with account sync, prior-account cache at both source reads, and failures on
+   either side of the edit. Timing advances inside a DB body as well as sleep, while spacing
+   tests isolate backoff from date/settle triggers. Actual stock persistence remains live-only. */
+test('review C1 no-index needs an authoritative matching hub block, identity and a live recheck', async (t) => {
+  for (const pointer of [undefined, null, 7]) await t.test(`normalized ${pointer}`, async () => {
+    const f = accountFixture({ storage: { _coldpluginIndex: pointer } });
+    assert.deepEqual(await f.run(), { state: 'no-index', backend: 'account' });
+    assert.deepEqual(f.requests.map((r) => r.kind), ['db']);
+    assert.deepEqual(f.calls.writes, []);
+  });
+  for (const variant of ['hub-pointer', 'live-race', 'login', 'auth-unknown', 'mismatch', '503', 'no-block']) {
+    await t.test(variant, async () => {
+      const f = accountFixture({ storage: {} });
+      if (variant === 'hub-pointer') f.hub.bytes = accountSave({ _coldpluginIndex: 'dead' });
+      if (variant === 'live-race') f.onBody((r) => { if (r.kind === 'db') f.live._coldpluginIndex = 'raced'; });
+      if (variant === 'login') f.onRequest(() => ({ status: 403 }));
+      if (variant === 'auth-unknown') f.local.set('ignoreRisuAuth', 'true');
+      if (variant === 'mismatch') f.hub.bytes = accountSave({}, { account: { id: 'foreign' } });
+      if (variant === '503') f.onRequest(() => ({ status: 503 }));
+      if (variant === 'no-block') f.hub.bytes = Buffer.concat([Buffer.from('RISUSAVE\0'), block(1, 'root', { account: { id: ACCOUNT_ID } })]);
+      const expected = { 'hub-pointer': 'account-not-settled', 'live-race': 'account-not-settled', login: 'account-login',
+        'auth-unknown': 'account-auth-unknown', mismatch: 'account-mismatch', '503': 'account-unavailable', 'no-block': 'account-unavailable' };
+      assert.equal((await f.run()).state, expected[variant]);
+      assert.ok(!f.calls.writes.some((row) => row[0] === 'delete'));
+    });
+  }
+});
+
+test('review C1 reopening an unconfirmed reset stays not-settled until the hub accepts the absent pointer', async () => {
+  const legacy = { nested: ['keep'] };
+  const f = accountFixture({ storage: { _coldpluginIndex: 'dead', legacy } });
+  const original = Buffer.from(f.hub.bytes);
+  await assert.rejects(f.run('reset', { pointer: 'dead', devicesClosed: true, signal: f.cancelAfter(12000) }), { code: 'CANCELLED' });
+  assert.deepEqual(f.calls.writes, [['delete', '_coldpluginIndex']]);
+  assert.strictEqual(f.live.legacy, legacy);
+  assert.deepEqual(f.hub.bytes, original);
+  assert.equal((await f.run()).state, 'account-not-settled');
+  await f.hostSave({ accepted: true, date: 'accepted-reset' });
+  assert.deepEqual(await f.run(), { state: 'no-index', backend: 'account' });
+  assert.deepEqual(stockSaveView(f.hub.bytes).storage, { legacy });
+  assert.deepEqual(hubReopen(f), index());
+});
+
+test('review C2 native profiles outrank account sync on every entry point without account reads', async () => {
+  for (const backend of ['tauri', 'node']) {
+    const f = accountFixture();
+    f.env.isTauri = backend === 'tauri';
+    f.env.isNode = true;
+    f.env.fetch = () => assert.fail('native account fetch');
+    f.env.accountCache = new Proxy({}, { get() { assert.fail('native account cache access'); } });
+    assert.equal(core.backend(f.env), backend);
+    assert.deepEqual(await core.diagnose(f.env), { state: 'unsupported-backend', backend });
+    for (const operation of [() => core.recover(f.env, { pointer: 'dead', candidateId: 'good', devicesClosed: true }),
+      () => core.reset(f.env, { pointer: 'dead', devicesClosed: true }), () => core.findCandidates(f.env),
+      () => core.readPersistedPointer(f.env), () => core.waitForPersisted(f.env, () => true)]) {
+      await assert.rejects(operation, { code: 'UNSUPPORTED_BACKEND' });
+    }
+    assert.deepEqual(f.requests, []); assert.deepEqual(f.cacheReads, []); assert.deepEqual(f.calls.writes, []);
+  }
+});
+
+test('review C3 prior-account cache never authenticates a current-login diagnosis or repair', async () => {
+  for (const method of ['diagnose', 'recover', 'reset']) {
+    const f = accountFixture();
+    const current = { id: 'current-account', token: 'current-login-token' };
+    f.local.set('fallbackRisuToken', JSON.stringify(current));
+    f.hub.bytes = accountSave(f.live, { account: current });
+    f.put('good', index([{ k: 'current-only', s: '{"exact":true}' }]));
+    f.onRequest((r) => {
+      assert.equal(r.init.headers['x-risu-auth'], current.token, 'previous account token must never be sent');
+    });
+    let editedAt;
+    f.onWrite(() => { editedAt = f.env.now(); });
+    f.onSleep(() => {
+      if (editedAt !== undefined) f.hub.bytes = accountSave(f.live, { account: current });
+    });
+    const result = await f.run(method, { pointer: 'dead', candidateId: 'good', devicesClosed: true, signal: f.cancelAfter(15000) });
+    if (method === 'diagnose') assert.equal(result.state, 'broken');
+    else {
+      assert.deepEqual(result, { confirmed: true, persistedPointer: method === 'recover' ? 'good' : null });
+      assert.deepEqual(hubReopen(f), method === 'recover' ? index([{ k: 'current-only', s: '{"exact":true}' }]) : index());
+      assert.equal(f.cacheReads.filter((key) => key === DB).length, 2, 'both source selections see the old cache');
+    }
+  }
+});
+
+test('review C3 a new login after the scan invalidates the formerly accepted cache source before editing', async () => {
+  const f = accountFixture(); f.put('good', index());
+  f.onRequest((r) => {
+    if (r.key === 'good') f.local.set('fallbackRisuToken', JSON.stringify({ id: 'new-login', token: 'new-token' }));
+  });
+  await assert.rejects(f.run('recover', { pointer: 'dead', candidateId: 'good', devicesClosed: true, signal: f.cancelAfter(15000) }), { code: 'CHANGED', applied: false });
+  assert.deepEqual(f.calls.writes, []);
+});
+
+test('review C4 terminal receipt failures are applied, while explicit cancellation is unchanged', async (t) => {
+  for (const method of ['recover', 'reset']) for (const variant of ['backend', 'hub', 'auth-unknown', 'not-risu', 'not-ready', 'capability', 'sleep', 'cancel']) {
+    await t.test(`${method} ${variant}`, async () => {
+      const f = accountFixture(); f.put('good', index()); let editedAt;
+      const sleepError = new Error('fixture sleep failed');
+      f.onWrite(() => { editedAt = f.env.now(); });
+      f.onSleep(() => {
+        if (editedAt === undefined) return;
+        if (variant === 'backend') f.env.isTauri = true;
+        if (variant === 'hub') f.local.set('hub', 'nightly');
+        if (variant === 'auth-unknown') f.local.set('ignoreRisuAuth', 'true');
+        if (variant === 'not-risu') f.env.pluginApis = () => undefined;
+        if (variant === 'not-ready') f.env.pluginApis = () => ({ getDatabase: () => ({}) });
+        if (variant === 'capability') f.env.hasDecompression = false;
+        if (variant === 'sleep') throw sleepError;
+      });
+      const expected = { backend: 'CHANGED', hub: 'CHANGED', 'auth-unknown': 'UNCERTAIN', 'not-risu': 'NOT_RISU',
+        'not-ready': 'NOT_READY', capability: 'UNSUPPORTED_BROWSER', cancel: 'CANCELLED' };
+      await assert.rejects(f.run(method, { pointer: 'dead', candidateId: 'good', devicesClosed: true,
+        signal: f.cancelAfter(6000) }), (error) => {
+        if (variant === 'sleep') assert.strictEqual(error, sleepError);
+        else assert.equal(error.code, expected[variant]);
+        assert.equal(error.applied, variant !== 'cancel');
+        return true;
+      });
+      assert.deepEqual(f.calls.writes, [method === 'recover' ? ['set', '_coldpluginIndex', 'good'] : ['delete', '_coldpluginIndex']]);
+      assert.equal(stockSaveView(f.hub.bytes).storage._coldpluginIndex, 'dead', 'failed receipt does not imply hub acceptance');
+    });
+  }
+});
+
+test('review C5 recover and reset report complete repair-scan totals before the single live edit', async () => {
+  for (const method of ['recover', 'reset']) {
+    const f = accountFixture(); f.put('good', index()); f.put('chat', { message: 'not an index' });
+    const progress = [];
+    f.onWrite(() => assert.deepEqual(progress, [[0, 2], [1, 2], [2, 2]]));
+    f.onSleep(async () => { if (f.calls.writes.length) await f.hostSave(); });
+    assert.deepEqual(await f.run(method, { pointer: 'dead', candidateId: 'good', devicesClosed: true,
+      onProgress: (...args) => progress.push(args), signal: f.cancelAfter(15000) }),
+    { confirmed: true, persistedPointer: method === 'recover' ? 'good' : null });
+  }
+});
+
+test('review C6 account cache Uint8Array parser does not construct a whole-buffer Blob', async () => {
+  let blobs = 0;
+  const context = { module: { exports: {} }, Uint8Array, ReadableStream, TextEncoder, TextDecoder, AbortController, Response,
+    Blob: class { constructor() { blobs += 1; assert.fail('Uint8Array parsing must not construct a Blob'); } } };
+  vm.runInNewContext(fs.readFileSync(corePath, 'utf8'), context);
+  const f = accountFixture(); f.put('dead', index([{ k: 'from-hub', s: 'true' }]));
+  f.env.gunzip = async (input) => {
+    const bytes = input instanceof Uint8Array ? input : new Uint8Array(await new Response(input.stream()).arrayBuffer());
+    const decoded = gunzipSync(bytes);
+    return new ReadableStream({ start(controller) { controller.enqueue(decoded); controller.close(); } });
+  };
+  assert.deepEqual(JSON.parse(JSON.stringify(await context.module.exports.diagnose(f.env))),
+    { state: 'healthy', backend: 'account', pointer: 'dead', keyCount: 1 });
+  assert.equal(blobs, 0, 'cache parser must use the byte array directly');
+  assert.ok(f.requests.every((r) => r.init.headers['x-risu-auth'] === ACCOUNT_TOKEN), 'cache must parse, not silently fall back');
+});
+
+test('review C7 A1 a hub read spanning the quiet boundary cannot confirm without another read started after it', async () => {
+  const f = accountFixture(); f.put('good', index([{ k: 'exact', s: '{"kept":[1,false]}' }]));
+  let editedAt; let advanced = false;
+  f.onWrite(() => { editedAt = f.env.now(); f.hub.bytes = accountSave(f.live); });
+  f.onBody((r, body) => {
+    if (r.kind === 'db' && editedAt !== undefined && !advanced && body.pulls === 1) {
+      assert.equal(r.at - editedAt, 2000);
+      f.advanceClock(3500); advanced = true;
+    }
+  });
+  assert.deepEqual(await f.run('recover', { pointer: 'dead', candidateId: 'good', devicesClosed: true, signal: f.cancelAfter(15000) }),
+    { confirmed: true, persistedPointer: 'good' });
+  assert.equal(advanced, true);
+  assert.deepEqual(f.requests.filter((r) => r.kind === 'db' && r.at >= editedAt).map((r) => r.at - editedAt), [2000, 6000]);
+  assert.equal(f.env.now() - editedAt, 6000);
+  assert.deepEqual(hubReopen(f), index([{ k: 'exact', s: '{"kept":[1,false]}' }]));
+});
+
+test('review C7 A3 receipt backoff doubles to sixty seconds and resets to two seconds on a new date', async () => {
+  const f = accountFixture(); f.put('good', index()); let editedAt;
+  f.onWrite(() => { editedAt = f.env.now(); });
+  f.onSleep(() => { if (editedAt !== undefined && f.env.now() - editedAt === 160000) f.cache.set(DATE_KEY, 'new-date'); });
+  await assert.rejects(f.run('recover', { pointer: 'dead', candidateId: 'good', devicesClosed: true,
+    signal: f.cancelAfter(180000) }), { code: 'CANCELLED' });
+  assert.deepEqual(f.requests.filter((r) => r.kind === 'db' && r.at >= editedAt).map((r) => r.at - editedAt),
+    [2000, 4000, 5000, 13000, 29000, 61000, 121000, 160000, 162000, 166000, 174000]);
+  assert.deepEqual(f.calls.writes, [['set', '_coldpluginIndex', 'good']]);
+});
+
+test('review C7 post-scan rechecks independently reject unsettled DBs, healed pointers and lost candidates', async (t) => {
+  for (const variant of ['settled', 'broken', 'target']) await t.test(variant, async () => {
+    const f = accountFixture(); f.put('good', index()); let candidateReads = 0;
+    f.onRequest((r) => { if (r.key === 'good') candidateReads += 1; });
+    f.onBody((r, body) => {
+      if (r.key !== 'good' || candidateReads !== 2 || body.pulls !== 1) return;
+      if (variant === 'settled') f.hub.bytes = accountSave({ _coldpluginIndex: 'foreign' });
+      if (variant === 'broken') f.put('dead', index([{ k: 'healed', s: 'true' }]));
+      if (variant === 'target') f.hub.cold.delete('good');
+    });
+    await assert.rejects(f.run('recover', { pointer: 'dead', candidateId: 'good', devicesClosed: true, signal: f.cancelAfter(15000) }),
+      { code: { settled: 'NOT_SETTLED', broken: 'NOT_BROKEN', target: 'CANDIDATE_INVALID' }[variant], applied: false });
+    assert.deepEqual(f.calls.writes, []);
+    assert.equal(f.live._coldpluginIndex, 'dead');
+  });
+});
+
+test('review C7 S3 unknown root or pluginStorage compression is unavailable and cannot authorize an edit', async (t) => {
+  for (const name of ['root', 'pluginStorage']) await t.test(name, async () => {
+    const bad = block(name === 'root' ? 1 : 11, name, name === 'root' ? { account: { id: ACCOUNT_ID } } : { _coldpluginIndex: 'dead' });
+    bad[1] = 2;
+    const bytes = Buffer.concat([Buffer.from('RISUSAVE\0'),
+      name === 'root' ? bad : block(1, 'root', { account: { id: ACCOUNT_ID } }, true),
+      name === 'pluginStorage' ? bad : block(11, 'pluginStorage', { _coldpluginIndex: 'dead' }, true)]);
+    const f = accountFixture(); f.hub.bytes = bytes;
+    assert.deepEqual(await f.run(), { state: 'account-unavailable', backend: 'account', status: null, phase: 'db' });
+    for (const method of ['recover', 'reset']) await assert.rejects(f.run(method, { pointer: 'dead', candidateId: 'good', devicesClosed: true }),
+      { code: 'ACCOUNT_UNAVAILABLE', applied: false });
     assert.deepEqual(f.calls.writes, []);
   });
 });

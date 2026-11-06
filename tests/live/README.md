@@ -22,12 +22,20 @@ Needs Playwright with Chromium: `PLAYWRIGHT_MODULE=/path/to/node_modules/playwri
    - Account mode (0.2.0; `BASE_URL=https://risuai.xyz/`, TEST account in `RPF_ACCOUNT_ENV` — default
      `~/.config/cpm-secrets/risu-test-account.env`, keys `RISU_TEST_ID` / `RISU_TEST_PASSWORD`; **a throwaway account**: every
      run empties its cold storage and uploads a fresh database over it; helpers in `account-live.mjs`, oracle = a fresh hub
-     read independent of the tool):
+     read independent of the tool — save-date 0, unique URL, no-store, own parser; "no pointer" counts only when the
+     plugin-storage block was found whole, a torn body reads as `truncated`):
      - `account-recover` — the account database points at a missing index while the newest stays on the server: the tool
        offers it first, waits for the other-devices box, recovers; the server's own save file then holds it, a reload reads the
-       values, and a second fresh profile that LOADS the account reads them too.
-     - `account-reset` — every cold item removed from the server → no candidates → reset → the server holds no pointer, the
-       store works after reload, and a second device reads the new value.
+       values, and a second fresh profile that LOADS the account loads exactly that index (its live pointer = the server's)
+       and reads the values too.
+     - `account-reset` — every cold item removed from the server → no candidates → reset → the server's save file has its
+       plugin-storage block and no pointer in it, the store works after reload, and a second device loads the new index the
+       server names and reads the new value.
+     - `account-reset-rejected` — the server refuses stock's database save (routed 503, counted so the run proves stock
+       tried) right after the reset: the panel keeps waiting and never shows ✅; closing it and running the tool again says
+       "not settled" (this tab has no pointer, the server still names the dead one) instead of ✅. A reload while the server
+       still refuses reopens this tab on stock's REFUSED local copy (next bullet), the server still names the dead pointer
+       (what every other device loads), and the tool still says "not settled" — never ✅.
      - `account-unavailable` / `account-login` — every cold read routed to 503 / 403 (stock's and the tool's): the tool reports
        it, offers no repair and changes nothing (live and server pointer).
      - `account-local-only` — the server lost the index but this browser holds an OPFS copy (stock reads it here): reported,
@@ -35,6 +43,9 @@ Needs Playwright with Chromium: `PLAYWRIGHT_MODULE=/path/to/node_modules/playwri
    - `account-save-probe.cjs` (design probe, not a release step): measures how stock saves in account mode — the IndexedDB
      cache `risuaiAccountCached` + `__date`, and the hub read's 303 for a matching date. 0.2.0 deliberately does NOT trust that
      pair (stock writes it even for rejected saves); re-run it when RisuAI changes `accountStorage.ts`.
+   - `account-save-date-probe.mjs` (design probe, read-only GETs): the hub answers a database read whose save date is at or
+     after its own with 303 `{"match":true}` (older dates and 0 → 200 with the body; measured 2026-11-06). Stock sends its
+     cached date, so after a refused save it reloads its refused local copy on that device. Re-run it when the hub changes.
    - `reset` — dead index, no survivor: reset → the panel's reload button → the dead pointer never
      returns, a legacy inline value survives, a new write persists across another reload.
    - `opfs-db` — the same with the host database in OPFS (`opfs_flag!`), asserting the location.

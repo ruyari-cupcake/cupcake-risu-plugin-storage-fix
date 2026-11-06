@@ -107,6 +107,12 @@ valid at that moment (a target deleted by another device's trash collection is r
 own (R32); ends only on abort. `onWaiting` additionally reports `hubRejecting` after `HUB_REJECT_HINT_SAVES` (3) consecutive new
 `__date`s whose fresh hub read still shows the pre-edit pointer (warn-403 / another device holds the session).
 
+**r2 terminal receipt clarification (review C4)** — there is still no deadline: transient hub failures keep waiting.
+The wait also ends if the hub can no longer be read as this account (login, identity mismatch, changed auth method), the
+backend/hub changes, the target vanishes, or a live API/capability/adapter fails. After the one live edit these errors carry
+`applied: true` (after public error mapping); pre-edit errors do not. Explicit `CANCELLED` remains unchanged. The panel
+must use applied wording instead of the pre-edit message; the tool never rolls back or repeats the edit.
+
 **Multi-device gate [R6: Opus 4, Sol 2]** — before recover or reset in account mode the user ticks "다른 기기와 다른 탭의 리스를
 모두 닫았어요" (a gate, not a warning). The success text tells them to open Risu fresh on other devices (an idle device opened
 before the repair will save its stale DB on its first edit and undo it — then run the tool again). No read-only check can prevent

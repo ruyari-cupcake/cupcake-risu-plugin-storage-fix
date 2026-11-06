@@ -54,7 +54,7 @@ const RPF_STYLE = `
 
 const RPF_BACKEND_TEXT = {
   node: [
-    '자체 서버(노드) 리스에서는 플러그인 저장소 파일이 서버에 있어서 이 도구가 확인할 수 없어요.',
+    '자체 서버(노드) 리스는 이 도구가 지원하지 않아요 (Risu 계정 저장을 켜 둔 경우도 마찬가지예요).',
     '아무것도 바꾸지 않았어요.',
   ].join('\n'),
   tauri: '데스크톱 앱은 이 도구가 지원하지 않아요. 아무것도 바꾸지 않았어요.',
@@ -66,10 +66,12 @@ const RPF_BROWSER_TEXT = {
     'https:// 주소나 localhost로 연 리스에서 다시 실행해 주세요. 아무것도 바꾸지 않았어요.',
   ].join('\n'),
   decompression: '이 브라우저는 도구에 필요한 기능(압축 풀기)을 지원하지 않아요. 최신 크롬·엣지·파이어폭스·사파리에서 실행해 주세요. 아무것도 바꾸지 않았어요.',
+  fetch: '이 브라우저에서는 도구가 계정 서버에 물어볼 수 없어요 (fetch 기능 없음). 최신 크롬·엣지·파이어폭스·사파리에서 실행해 주세요. 아무것도 바꾸지 않았어요.',
 };
 
 const RPF_ACCOUNT_HINT = '이 브라우저에서 Risu 계정 저장을 쓰다가 로그아웃했거나 동기화를 끈 흔적이 있어요. '
-  + '그렇다면 최신 플러그인 데이터는 계정 쪽에 남아 있을 수 있어요 (이 도구는 계정 쪽을 확인할 수 없어요). '
+  + '그렇다면 최신 플러그인 데이터는 계정 쪽에 남아 있을 수 있어요 (로그아웃한 상태에서는 이 도구가 계정 쪽을 확인할 수 없어요. '
+  + '다시 로그인해 계정 데이터를 불러온 뒤 이 도구를 실행하면 계정 서버 쪽을 확인해요). '
   + '이 도구로 무언가를 바꾸기 전에, 설정의 Risu 계정에서 다시 로그인해 계정 데이터를 불러오는 것부터 해 보세요.';
 
 /*
@@ -116,10 +118,56 @@ function rpfAccountStatus(result) {
       + '서버가 잠깐 바쁘거나 연결이 끊긴 것 같아요. 확인을 끝까지 하지 못하면 이 도구는 아무것도 바꾸지 않아요. 잠시 뒤 "다시 확인"을 눌러 주세요.' };
   }
   if (result.state === 'account-not-settled') {
-    return { tone: 'error', buttons: ['reload', 'rerun'], text: '⚠ 계정 서버에 저장된 목차 표시와 이 탭의 표시가 달라요 (다른 기기나 탭이 그사이 저장했을 수 있어요). 아무것도 바꾸지 않았어요.\n'
-      + '다른 기기와 탭의 리스를 닫고, 이 탭을 새로고침한 뒤 다시 실행해 주세요.' };
+    /* Two causes. Another device/tab saved: a reload fixes it. Or the account server refuses THIS device's saves: stock still
+       writes its local copy, and after a reload the hub answers "match" to that newer date, so stock shows the refused copy
+       here and a reload changes nothing — the user needs RisuAI saving again (its own warning or login box) first. */
+    return { tone: 'error', buttons: ['reload', 'rerun'], text: '⚠ 계정 서버에 저장된 목차 표시와 이 탭의 표시가 달라요. 아무것도 바꾸지 않았어요.\n'
+      + '다른 기기나 탭이 그사이 저장했을 수 있어요: 다른 기기와 탭의 리스를 닫고, 이 탭을 새로고침한 뒤 다시 실행해 주세요.\n'
+      + '새로고침한 뒤에도 같은 문구가 나오면, 계정 서버가 이 기기의 저장을 받지 않고 있는 거예요 (리스는 이 기기에 남은 사본을 보여 줘서 '
+      + '여기서는 멀쩡해 보여도, 다른 기기는 서버의 표시를 읽어요). 리스가 띄운 계정 경고나 로그인 창이 있으면 먼저 처리하고, '
+      + '리스가 다시 저장할 수 있게 된 뒤에 이 도구를 실행해 주세요.' };
   }
   return null;
+}
+
+/*
+ * Panel line after a failed repair. Core marks an error `applied` when it came AFTER the live pointer edit (account receipt:
+ * login refused, another account's file, account settings changed, target vanished): this tab already holds the change but
+ * the server save was never confirmed. Several core messages say "변경하지 않았어요", so an applied error never shows the
+ * core message (TARGET_GONE's is already worded for after the edit). Pure, so tests can check every wording.
+ */
+const RPF_APPLIED_NOTE = '이 탭에는 이미 바꾼 표시가 들어가 있어요. 다만 계정 서버에 저장된 것까지는 확인하지 못했어요.';
+const RPF_APPLIED_REASON = {
+  ACCOUNT_LOGIN: '계정 서버가 이 기기의 로그인을 더는 받아 주지 않아요.',
+  ACCOUNT_MISMATCH: '계정 서버의 저장 파일이 다른 계정의 것으로 바뀌었어요.',
+  CHANGED: '확인하는 사이 리스의 계정 저장 상태나 연결된 서버가 바뀌었어요.',
+};
+const RPF_APPLIED_AGAIN = '"지금 새로고침"을 누른 뒤 이 도구를 다시 실행하면, 계정 서버에 저장됐는지 처음부터 다시 확인해요.';
+
+function rpfRepairErrorView(error, isFixError, fallbackText) {
+  const code = isFixError ? error.code : null;
+  /* Core marks ANY error escaping after the edit, an unexpected (non-FixError) one included, so `applied` is honoured
+     whatever the error class; an unexpected error keeps its own detail as the reason line. */
+  if (error && error.applied === true) {
+    if (code === 'TARGET_GONE') {
+      return { tone: 'error', buttons: ['reload', 'rerun'], text: `⚠ ${error.message}\n${RPF_APPLIED_NOTE}\n${RPF_APPLIED_AGAIN}` };
+    }
+    const reason = RPF_APPLIED_REASON[code] || (isFixError ? '계정 서버에서 고친 결과를 확실하게 읽지 못했어요.' : fallbackText);
+    const again = code === 'ACCOUNT_LOGIN' ? RPF_ACCOUNT_RELOAD_LOGIN : RPF_APPLIED_AGAIN;
+    return { tone: 'error', buttons: ['reload', 'rerun'], text: `⚠ ${reason}\n${RPF_APPLIED_NOTE}\n${again}` };
+  }
+  if (code === 'NOT_SETTLED' || code === 'UNCERTAIN') {
+    return { tone: 'error', buttons: ['reload', 'rerun'],
+      text: `⚠ ${error.message}\n"지금 새로고침"을 누른 뒤 이 도구를 다시 실행해 주세요. "다시 확인"만 누르면 같은 상태로 다시 확인하게 돼요.` };
+  }
+  if (code === 'TARGET_GONE') {
+    return { tone: 'error', buttons: ['reload', 'rerun'],
+      text: `⚠ ${error.message}\n"지금 새로고침"을 누른 뒤 이 도구를 다시 실행해 주세요. 남아 있는 다른 시점이 있으면 다시 보여 줘요.` };
+  }
+  if (code === 'ACCOUNT_LOGIN') {
+    return { tone: 'error', buttons: ['reload', 'rerun'], text: `❌ ${error.message}\n${RPF_ACCOUNT_RELOAD_LOGIN}` };
+  }
+  return { tone: 'error', buttons: ['rerun'], text: `❌ ${fallbackText}` };
 }
 
 /* Every device on the account loads what this one saves, so the repair waits until the user says the others are closed. */
@@ -421,7 +469,9 @@ function openFixPanel() {
       return;
     }
     if (result.state === 'no-index') {
-      setStatus('✅ 플러그인 저장소는 정상이에요 (아직 저장된 값이 없어요). 고칠 게 없어요.', 'ok');
+      setStatus(isAccount()
+        ? '✅ 플러그인 저장소는 정상이에요. 계정 서버의 저장 파일에도 목차 표시가 없어요 (아직 저장된 값이 없어요). 고칠 게 없어요.'
+        : '✅ 플러그인 저장소는 정상이에요 (아직 저장된 값이 없어요). 고칠 게 없어요.', 'ok');
       showButtons([]);
       return;
     }
@@ -503,16 +553,24 @@ function openFixPanel() {
     showButtons([]);
     closeConfirm();
     deviceGate.hidden = true;
+    /* Account repair first re-checks every item on the account server (core refuses an edit after an incomplete scan), which
+       takes as long as the scan in the diagnosis did — so it shows the same n/N count instead of promising seconds. */
     setStatus(account
-      ? '바꾸는 중… 리스가 계정 서버에 저장을 마칠 때까지 기다려요 (보통 몇 초). 창을 닫지 마세요.'
+      ? '바꾸기 전에 계정 서버를 한 번 더 확인하고, 리스가 계정 서버에 저장을 마칠 때까지 기다려요. 창을 닫지 마세요.'
       : '바꾸는 중… 리스가 저장을 마칠 때까지 기다려요 (보통 몇 초). 창을 닫지 마세요.');
     const onWaiting = rpfWaitingDisplay({ setStatus, isAborted: () => run.signal.aborted, account });
+    const onProgress = account ? (done, total) => {
+      if (run.signal.aborted) return;
+      setStatus(done < total
+        ? `바꾸기 전에 계정 서버의 항목을 한 번 더 확인하는 중… (${done}/${total}) 창을 닫지 마세요.`
+        : '바꾸는 중… 리스가 계정 서버에 저장을 마칠 때까지 기다려요. 창을 닫지 마세요.');
+    } : undefined;
     const devices = { devicesClosed: account ? devicesClosed.checked : undefined };
     try {
       if (action === 'recover') {
-        await RisuPluginStorageFix.recover(env, { pointer: diagnosis.pointer, candidateId, signal: run.signal, onWaiting, ...devices });
+        await RisuPluginStorageFix.recover(env, { pointer: diagnosis.pointer, candidateId, signal: run.signal, onWaiting, onProgress, ...devices });
       } else {
-        await RisuPluginStorageFix.reset(env, { pointer: diagnosis.pointer, signal: run.signal, onWaiting, ...devices });
+        await RisuPluginStorageFix.reset(env, { pointer: diagnosis.pointer, signal: run.signal, onWaiting, onProgress, ...devices });
       }
       if (run.signal.aborted) return;
       detail.textContent = '';
@@ -527,23 +585,9 @@ function openFixPanel() {
       showButtons([reloadButton]);
     } catch (error) {
       if (run.signal.aborted) return;
-      if (error instanceof RisuPluginStorageFix.FixError && (error.code === 'NOT_SETTLED' || error.code === 'UNCERTAIN')) {
-        setStatus(`⚠ ${error.message}\n"지금 새로고침"을 누른 뒤 이 도구를 다시 실행해 주세요. "다시 확인"만 누르면 같은 상태로 다시 확인하게 돼요.`, 'error');
-        showButtons([reloadButton, rerunButton]);
-        return;
-      }
-      if (error instanceof RisuPluginStorageFix.FixError && error.code === 'TARGET_GONE') {
-        setStatus(`⚠ ${error.message}\n"지금 새로고침"을 누른 뒤 이 도구를 다시 실행해 주세요. 남아 있는 다른 시점이 있으면 다시 보여 줘요.`, 'error');
-        showButtons([reloadButton, rerunButton]);
-        return;
-      }
-      if (error instanceof RisuPluginStorageFix.FixError && error.code === 'ACCOUNT_LOGIN') {
-        setStatus(`❌ ${error.message}\n${RPF_ACCOUNT_RELOAD_LOGIN}`, 'error');
-        showButtons([reloadButton, rerunButton]);
-        return;
-      }
-      setStatus(`❌ ${rpfErrorText(error)}`, 'error');
-      showButtons([rerunButton]);
+      const view = rpfRepairErrorView(error, error instanceof RisuPluginStorageFix.FixError, rpfErrorText(error));
+      setStatus(view.text, view.tone);
+      showButtons(view.buttons.map((name) => buttonsByName[name]));
     } finally {
       if (running === run) running = null;
     }
@@ -569,4 +613,4 @@ function openFixPanel() {
   runDiagnose();
 }
 
-if (typeof module !== 'undefined') module.exports = { rpfWaitingDisplay, rpfAccountStatus, RPF_SLOW_SAVE_NOTICE_MS, RPF_SAVE_STALL_HINT_MS, RPF_ACCOUNT_RELOAD_LOGIN, RPF_DEVICE_GATE_TEXT, RPF_DEVICE_GATE_WHY }; // @strip-in-bundle
+if (typeof module !== 'undefined') module.exports = { rpfWaitingDisplay, rpfAccountStatus, rpfRepairErrorView, RPF_APPLIED_NOTE, RPF_BACKEND_TEXT, RPF_BROWSER_TEXT, RPF_SLOW_SAVE_NOTICE_MS, RPF_SAVE_STALL_HINT_MS, RPF_ACCOUNT_RELOAD_LOGIN, RPF_DEVICE_GATE_TEXT, RPF_DEVICE_GATE_WHY }; // @strip-in-bundle

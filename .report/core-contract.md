@@ -62,9 +62,9 @@ the bookmarklet must parse with every newline removed).
   (`risuaiAccountCached` / `keyvaluepairs`, abort missing-DB upgrades), `randomId()` (crypto.randomUUID),
   and `hubBase()` (read current `localStorage.hub`: nightly → `https://nightly.sv.risuai.xyz`, else
   `https://sv.risuai.xyz`). All adapters are lazy; web operations never access accountCache or fetch.
-- `FixError` (code + Korean message), codes at least: `NOT_RISU`, `NOT_READY`, `UNSUPPORTED_BACKEND`,
+- `FixError` (code + Korean message + boolean `applied`, false by default), codes at least: `NOT_RISU`, `NOT_READY`, `UNSUPPORTED_BACKEND`,
   `NOT_BROKEN`, `CHANGED` (live pointer differs from the diagnosed one), `CANDIDATE_INVALID`,
-  `CANCELLED` (0.1.1 removed `SAVE_UNCONFIRMED`: the receipt never gives up on its own, R32).
+  `CANCELLED` (0.1.1 removed `SAVE_UNCONFIRMED`: no receipt deadline, R32; account terminal failures are listed below).
 - `async diagnose(env, {signal, onProgress})` → one of
   - `{ state: 'not-risu' }` — no `__pluginApis__`/`getDatabase`;
   - `{ state: 'not-ready' }` — `getDatabase().pluginCustomStorage` missing/not an object;
@@ -107,24 +107,31 @@ the bookmarklet must parse with every newline removed).
 Authority: `account-mode-design.md` r1 and `account-mode-review/05-sol-spec.md`. The stock account save
 writes cache bytes and `database/database.bin__date` even when the hub rejects the save
 (`src/ts/storage/accountStorage.ts:23-95`); neither is a receipt. The cache root supplies the first token
-source, fallbackRisuToken the second; only an initial 403 advances to the next source. Accepted identity
+source, fallbackRisuToken the second, except that a valid fallback with a different account ID discards
+that cache source (stock Logout leaves the previous account's cache). Both run start and the pre-edit
+source recheck use this rule. Only an initial 403 advances to the next source. Accepted identity
 and hub remain bound to the run. Credential IDs remain strings; a present hub root ID of any type
 must match that accepted string exactly (non-string IDs are mismatches, not absent identities).
 ignoreRisuAuth=true refuses diagnosis/edits without guessing an auth method.
 
-- `backend(env)` exposes the existing selection order: account, node, tauri, web.
+- `backend(env)` selects tauri, node, account, web, in that order; native profiles are refused even with accountst=able.
 - `diagnose` in account mode requires OPFS, DecompressionStream and fetch. All account-specific results
   carry `backend: 'account'`: `no-index`; `healthy {pointer,keyCount}`; `local-only {pointer,keyCount}`;
   `account-login`; `account-auth-unknown`; `account-mismatch`; `account-not-settled {pointer}`;
   `account-unavailable {status: number|null, phase: 'db'|'index'|'list'|'scan'}`; `uncertain {pointer}`;
   `broken {pointer,reason:'missing'|'unreadable',candidates,uncertainCount}`. Shared not-risu/not-ready and
-  unsupported-browser retain their meaning. No account/root credentials are returned.
+  unsupported-browser retain their meaning. `no-index` requires a fresh, identity-bound hub DB read
+  with a pluginStorage block and no string pointer, plus a live pointer recheck (both normalized to
+  string|null). A hub pointer still present after an unconfirmed reset yields account-not-settled,
+  never no-index. No account/root credentials are returned.
 - Every request is GET, no-store, x-risu-auth, and a run AbortSignal. DB reads use a fresh UUID suffix,
   x-risu-save-date=0 and x-risu-key=database/database.bin. The incremental RISUSAVE reader shares the
   byte-array/cache and streaming/hub format rule: ROOT=1/name=root for account.id (token only for local
   credential selection), PLUGIN_STORAGE=11/name=pluginStorage for the pointer. It handles split headers
   and lengths, gzip and an empty gzip payload (hasBlock=true, pointer=null), rejects truncation, skips
-  other blocks, and cancels immediately after pluginStorage, before characters/chats.
+  other blocks, and cancels immediately after pluginStorage, before characters/chats. A cache
+  Uint8Array is enqueued directly into a stream, never copied into a Blob; compression bytes other
+  than 0 (plain) and 1 (gzip) on the root or pluginStorage block are rejected.
 - R2: a 200 index must decode and match the unchanged stock acceptance rule; gzip failures are uncertain,
   JSON/shape failures unreadable. Missing requires 404, absence from @list-keys, then another 404 at least
   HUB_MISSING_RECHECK_MS=2000 later. Listed/reappearing items are unavailable, never missing. A healthy
@@ -135,8 +142,9 @@ ignoreRisuAuth=true refuses diagnosis/edits without guessing an auth method.
   `{id,flushedAt:number|null,keyCount,sampleKeys,largeCount,missingLarge}`; flushedAt is the maximum finite
   index:true trash timestamp, missingLarge uses the complete hub key set. Sort flushedAt descending (null
   last), keyCount descending, then id ascending. findCandidates remains an array-returning API.
-- `recover` / `reset` add `devicesClosed`. In account mode strict true is required before any database/cache
-  or network read; web mode ignores it. Both recheck the live pointer, fresh hub pointer/identity, R2
+- `recover` / `reset` add `devicesClosed` and `onProgress(done, total)`. In account mode strict true is required before any database/cache
+  or network read; web mode ignores both. Progress reports the repair-time complete hub scan, with
+  the same totals as diagnosis. Both recheck the live pointer, fresh hub pointer/identity, R2
   brokenness, complete scan and accepted credential source across awaited preflight reads. recover also
   rereads its hub candidate. They perform exactly one live property set/delete and never replay or undo it.
   New Korean FixError codes: DEVICES_NOT_CONFIRMED, ACCOUNT_LOGIN, ACCOUNT_UNAVAILABLE, ACCOUNT_MISMATCH,
@@ -148,7 +156,15 @@ ignoreRisuAuth=true refuses diagnosis/edits without guessing an auth method.
   original target raises TARGET_GONE, leaving the edit in place; unverifiable successors keep waiting.
   Each 500ms poll reads only the cache date. New dates, quiet-window close, and unresolved backoff
   (2000ms doubling to 60000ms, reset on new dates) trigger fresh DB reads. A 303 never confirms. No receipt
-  deadline exists; only explicit cancellation ends an unresolved wait. Account onWaiting adds hubRejecting
+  deadline exists. Explicit cancellation ends an unresolved wait with CANCELLED unchanged; terminal
+  failures also end it when the account cannot be read as the accepted identity (ACCOUNT_LOGIN,
+  ACCOUNT_MISMATCH, UNCERTAIN for changed auth), the backend/hub changes (CHANGED), or the target
+  vanishes (TARGET_GONE). Loss of the live API/database or browser capability can likewise escape
+  as NOT_RISU, NOT_READY or UNSUPPORTED_BROWSER, as can an unexpected adapter failure. Every error
+  escaping recover/reset after the live edit is mapped first, then marked applied:true, except
+  CANCELLED; pre-edit FixErrors have applied:false. Transient account-unavailable hub failures
+  continue waiting. The UI uses its own applied wording, not a pre-edit error message.
+  Account onWaiting adds hubRejecting
   after three consecutive new dates whose fresh hub read retains the dead pointer, resetting on other or
   unavailable snapshots. The unchanged web callback omits this account-only flag (treated as false by UI).
   Throwing display callbacks cannot stop a receipt or replay an edit.

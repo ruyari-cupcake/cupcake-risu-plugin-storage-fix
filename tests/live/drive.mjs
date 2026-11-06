@@ -5,7 +5,8 @@
 //
 // scenario: venue (harness sanity, no tool) | healthy | reset | reset-race | recover | recover-account-hint
 //           | not-settled | receipt-stuck | opfs-db | aged-restore | aged-reset
-//           | account-recover | account-reset | account-unavailable | account-login | account-local-only
+//           | account-recover | account-reset | account-reset-rejected | account-unavailable | account-login
+//           | account-local-only
 //           (aged = host clock moved past stock trash grace; receipt-stuck = host stops saving during the receipt;
 //            account-* = Risu account sync on the TEST account from tests/live/account-live.mjs — run with
 //            BASE_URL=https://risuai.xyz/; the harness empties that account's cold storage and overwrites its database)
@@ -21,7 +22,7 @@ import http from 'node:http';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import {
-  emptyHubColdStorage, hubSession, loginAndSync, hubPointer, waitHubSaved, failHubColdReads,
+  emptyHubColdStorage, hubSession, loginAndSync, hubPointer, waitHubSaved, failHubColdReads, rejectHubDatabaseWrites,
 } from './account-live.mjs';
 
 const require = createRequire(import.meta.url);
@@ -682,6 +683,61 @@ async function main() {
       gate((await pointer(page)) === current, 'POINTER_CHANGED');
       gate(!(await page.locator(`${PANEL} button.reset`).isVisible()) && !(await page.locator(`${PANEL} button.recover`).isVisible()), 'REPAIR_OFFERED');
       step('local-only copy reported, nothing changed');
+    } else if (scenario === 'account-reset-rejected') {
+      // The account server refuses stock's database save right after a reset (review S1). The tool must never show ✅:
+      // not while it waits, and not when the user closes the waiting panel and runs it again — this tab then has no pointer
+      // while the server still names the dead one, which other devices (and this one after a reload) load.
+      await seed(page, [['alpha', 1]]);
+      const dead = await pointer(page);
+      await waitHubSaved(page, { until });
+      step('every cold item removed from the account server', { removed: await emptyHubColdStorage() });
+      await reload(page);
+      await expectDead(page);
+      await runTool(page);
+      await panelStatus(page, /계정 서버에 플러그인 저장소 목차가 없어요/, 240000);
+      const refusal = await rejectHubDatabaseWrites(context);
+      await page.locator(`${PANEL} input.devices-closed`).check();
+      await page.locator(`${PANEL} button.reset`).click();
+      await page.locator(`${PANEL} input.agree`).check();
+      await page.locator(`${PANEL} button.do-reset`).click();
+      // Settle window (5 s) plus several hub reads and stock save attempts: sample the panel the whole time.
+      const seen = new Set();
+      const watchUntil = Date.now() + 45000;
+      while (Date.now() < watchUntil) {
+        seen.add((await page.locator(`${PANEL} .status`).innerText()).split('\n')[0].slice(0, 80));
+        await sleep(500);
+      }
+      gate(refusal.counter.rejected >= 1, 'STOCK_NEVER_TRIED_TO_SAVE', { rejected: refusal.counter.rejected });
+      gate(![...seen].some((line) => /✅/.test(line)), 'FALSE_OK_WHILE_SERVER_REFUSES', { seen: [...seen] });
+      gate((await pointer(page)) === null, 'LIVE_POINTER_NOT_CLEARED');
+      const onHub = await hubPointer(page);
+      gate(onHub.hasBlock === true && onHub.pointer === dead, 'HUB_NOT_STILL_DEAD', { isNull: onHub.pointer === null });
+      step('server refused the save: the panel keeps waiting, no ✅', { rejected: refusal.counter.rejected, lines: seen.size });
+      await page.locator(`${PANEL} .close`).click();
+      await until('PANEL_NOT_CLOSED', () => page.locator(PANEL).count().then((n) => n === 0));
+      await runTool(page);
+      const again = await panelStatus(page, /✅|⚠|❌/, 240000);
+      gate(!again.startsWith('✅'), 'FALSE_OK_ON_RERUN', { again: again.slice(0, 160) });
+      gate(/계정 서버에 저장된 목차 표시와 이 탭의 표시가 달라요/.test(again), 'RERUN_NOT_NOT_SETTLED', { again: again.slice(0, 160) });
+      await expectAccountPanelClean(page);
+      step('re-run after closing the waiting panel says not settled, not ✅', { line: again.split('\n')[0].slice(0, 80) });
+      // The user follows that advice while the server still refuses. Stock sends its cached __date (written even for the
+      // refused save) and the hub answers 303 {match:true} to any date at or after its own (tests/live/account-save-date-probe.mjs,
+      // measured 2026-11-06), so this tab normally reopens on the REFUSED local copy — no pointer — while every other device loads the
+      // server's dead one. Whatever this tab loads, the tool must still not say ✅.
+      await reload(page);
+      const reopened = await pointer(page);
+      const hubAfter = await hubPointer(page);
+      gate(hubAfter.hasBlock === true && hubAfter.pointer === dead, 'HUB_NOT_STILL_DEAD_AFTER_RELOAD', { isNull: hubAfter.pointer === null });
+      gate(reopened === null || reopened === dead, 'UNEXPECTED_POINTER_AFTER_RELOAD', { reopenedIsNull: reopened === null });
+      await runTool(page);
+      const third = await panelStatus(page, /✅|⚠|❌/, 240000);
+      gate(!third.startsWith('✅'), 'FALSE_OK_AFTER_RELOAD', { third: third.slice(0, 160) });
+      gate(reopened === null ? /표시가 달라요/.test(third) : /계정 서버에 플러그인 저장소 목차가 없어요/.test(third), 'WRONG_STATE_AFTER_RELOAD',
+        { reopenedIsNull: reopened === null, third: third.slice(0, 160) });
+      step('reload while the server refuses: tab reopens on stock\'s refused local copy, server still dead, tool still not ✅',
+        { reopened: reopened === null ? 'refused local copy (no pointer)' : 'server copy (dead pointer)', line: third.split('\n')[0].slice(0, 60) });
+      await refusal.allow();
     } else if (scenario === 'reset' || scenario === 'opfs-db' || scenario === 'reset-race') {
       // reset-race: a plugin writes right after the pointer is cleared, so the store flushes a NEW
       // index before the host saves; the tool must still confirm (a verified successor) and the

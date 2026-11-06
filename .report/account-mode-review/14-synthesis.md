@@ -40,3 +40,29 @@ agy FIX BEFORE SHIP (3 findings, all rejected below).
   the same token, so a live swap cannot be staged without a second login; the 403-on-every-read scenario does exercise
   both sources failing. Swap-success stays unit-covered (`core.test.cjs` token-order tests). Same reason for
   `expectAccountPanelClean` checking one token.
+
+## Fix round (after this synthesis)
+
+- Core C1–C7: Sol implementer, spec `16-fix-spec.md`; RED 223 tests / 50 failing on the pre-fix core (`17-red-core.log`),
+  GREEN core 223/223 (`18-green-core.log`), `npm test` 247/247 (`19-unit.log`); 20 new core mutants.
+- Mutation run 1 stopped at mutant 91 (`20-mutate.log`, 90 killed before it): Sol's retargeted needle "account preflight
+  skips complete scan" matched twice (diagnose now passes `onProgress` too) — anchored on the preceding `accountBroken`.
+- Live RED proof: new `account-reset-rejected` on the pre-fix build a4abb49 → `FAIL … FALSE_OK_ON_RERUN` (stock tried
+  the save once, routed 503; the panel showed no ✅ during the 45 s wait; the re-run showed ✅ no-index).
+- Delta review (one Astra medium seat, fix diff `21-fix-diff.patch`): FIX BEFORE SHIP, 1 Low — the panel honoured
+  `applied` only on FixError while core also marks an unexpected Error escaping after the edit. Accepted (source-checked
+  `core.js:572-576` vs `ui.js` `rpfRepairErrorView`): `applied` is honoured for any error class, the unexpected error's
+  own text is the reason line; UI test + 4 UI mutants (all killed in a pre-check). Everything else: "checked and sound".
+- Full gate run 3 (`tests/live/work/gate-020.sh`, tree e416bbbafca142da): unit 247/247; 10 stock web + 2 loaders + 5 account
+  scenarios PASS; mutation aborted at mutant 121 on a second ambiguous needle ("account repair scan drops progress", same
+  cause) — a static exactly-once check of all 140 needles then found no other; `account-reset-rejected` passed both tool
+  verdicts (no ✅ while refused, not-settled on re-run) and failed the HARNESS's last expectation "a reload brings the dead
+  pointer back".
+- Measured why (`tests/live/account-save-date-probe.mjs`, read-only): the hub answers 303 {match:true} to any save date at
+  or after its own (0 / 1 / a year old → 200). Stock writes its cache + date even for a refused save, so a reload reopens
+  that device on the REFUSED copy while other devices load the dead pointer. Harness corrected (whatever the tab reopens
+  on, the tool must not say ✅; hub must still be dead) and the not-settled panel text now names this second cause (a
+  reload alone cannot fix it; RisuAI must be able to save again first).
+- Affected-set gate (`gate-020-delta.sh`, tree 9cf1ee237ad92070, `src/core.js` unchanged since run 3): unit 247/247,
+  mutation 140/140 KILLED, local loader PASS, risuai.xyz `account-reset-rejected` PASS (reopened on the refused local copy,
+  hub still dead, tool still not-settled).
